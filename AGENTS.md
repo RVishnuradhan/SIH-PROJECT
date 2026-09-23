@@ -21,4 +21,11 @@ Never weaken: bill snapshots, the stock ledger (stock changes only through
 bill-number rules. Never invent material rates, stock quantities or thresholds.
 Build only the current phase.
 
-Commands: `pnpm dev` · `pnpm check` (lint, format, types, unit tests) · `pnpm build` · `pnpm test:e2e`
+Database: the schema is `prisma/schema.prisma`; the rules Prisma can't express
+(CHECKs, triggers, views) are in `prisma/migrations/*_init/migration.sql`. Never edit an
+applied migration: change the schema and add a new one. Money is whole paise in
+`src/domain/money.ts`; never use floating-point rupees.
+
+Commands: `pnpm dev` · `pnpm check` (lint, format, types, unit tests) · `pnpm test:integration`
+(needs PostgreSQL via `DATABASE_URL`) · `pnpm build` · `pnpm test:e2e` · `pnpm db:deploy` ·
+`pnpm db:seed`

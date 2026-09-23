@@ -1,17 +1,29 @@
+import { getDb } from "@/lib/db";
+
 import packageJson from "../../../../package.json";
 
 /**
- * Liveness check for deployments and uptime monitors. Always answered fresh,
- * never cached. A database check is added in Phase 2.
+ * Health check for deployments and uptime monitors. Always answered fresh,
+ * never cached. Reports 503 when the database can't be reached.
  */
-export function GET() {
+export async function GET() {
+  let database: "ok" | "unreachable" = "ok";
+  try {
+    await getDb().$queryRaw`SELECT 1`;
+  } catch (error) {
+    console.error("Health check: database unreachable", error);
+    database = "unreachable";
+  }
+
+  const healthy = database === "ok";
   return Response.json(
     {
-      status: "ok",
+      status: healthy ? "ok" : "degraded",
       service: "sms-associates",
       version: packageJson.version,
+      database,
       time: new Date().toISOString(),
     },
-    { headers: { "Cache-Control": "no-store" } },
+    { status: healthy ? 200 : 503, headers: { "Cache-Control": "no-store" } },
   );
 }

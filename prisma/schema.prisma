@@ -1,12 +1,11 @@
 // =============================================================================
 // SMS Associates — Centering Materials Rental & Inventory Management System
-// Database schema — PROPOSAL FOR REVIEW
+// Database schema (approved 23 Sep 2026). Design notes: docs/DATABASE.md.
 //
-// Phase 2 moves this file to prisma/schema.prisma. Rules that Prisma's schema
-// language cannot express (CHECK constraints, the stock-ledger trigger, the
-// append-only and lock guards, the pg_trgm extension) live in
-// docs/database/constraints.sql and ship in the same first migration.
-// Design notes: docs/DATABASE.md.
+// Rules that Prisma's schema language cannot express (CHECK constraints, the
+// stock-ledger trigger, history guards, views and the pg_trgm extension) live
+// in the migrations (prisma/migrations/*_init/migration.sql). Any change here
+// needs a new migration; never edit an applied one.
 //
 // Conventions
 //   • PostgreSQL tables and columns are snake_case (@@map / @map).
@@ -111,7 +110,7 @@ enum DocumentType {
 
 /// Every kind of stock movement and its fixed effect on the three counters —
 /// total (owned), rented (with customers) and held (damaged/lost awaiting an
-/// admin). A CHECK constraint enforces these effects (constraints.sql).
+/// admin). A CHECK constraint in the init migration enforces these effects.
 ///
 ///   type                   total  rented  held      caused by
 ///   INITIAL_STOCK          +n                       admin

@@ -14,12 +14,17 @@ concurrency:
 
 env:
   NEXT_TELEMETRY_DISABLED: 1
+  # The PostgreSQL service below (same credentials as docker-compose.yml).
+  DATABASE_URL: postgresql://sms:sms_local_only@localhost:5432/sms_associates
 
 jobs:
   checks:
     name: Lint, format, types, unit tests, build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # No database here: the build and unit tests must not need one.
+      DATABASE_URL: ""
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
@@ -34,10 +39,56 @@ jobs:
       - run: pnpm test
       - run: pnpm build
 
+  database:
+    name: Database (migrations, seed, integration tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sms
+          POSTGRES_PASSWORD: sms_local_only
+          POSTGRES_DB: sms_associates
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sms -d sms_associates"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:deploy
+      - run: pnpm db:status
+      - name: Seed twice (the seed must be safe to re-run)
+        run: pnpm db:seed && pnpm db:seed
+      - run: pnpm test:integration
+
   e2e:
     name: End-to-end tests (Playwright)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: sms
+          POSTGRES_PASSWORD: sms_local_only
+          POSTGRES_DB: sms_associates
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sms -d sms_associates"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
@@ -47,6 +98,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm db:deploy
       - run: pnpm build
       - run: pnpm test:e2e
       - name: Upload Playwright report

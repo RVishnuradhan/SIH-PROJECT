@@ -2,7 +2,7 @@
 
 **Product:** Centering Materials Rental & Inventory Management System
 **Source of truth:** [PRD.md](PRD.md) (v1.0) · **Database design:** [DATABASE.md](DATABASE.md)
-**Status:** decisions A1–A21 and the database design approved 23 Sep 2026 · Phase 1 (project initialization) done · next: Phase 2
+**Status:** decisions A1–A21 and the database design approved 23 Sep 2026 · Phase 1 (project initialization) and Phase 2 (database) done · next: Phase 3, after approval
 
 ---
 
@@ -344,12 +344,13 @@ SIH-PROJECT/
 │   ├── PRD.md                        # product requirements (source of truth)
 │   ├── ARCHITECTURE.md               # this document
 │   ├── DATABASE.md                   # data model, rules, verification
-│   └── database/                     # schema proposal → moves to prisma/ in Phase 2
+│   └── database/erd.png              # rendered ER diagram
 ├── prisma/
 │   ├── schema.prisma
-│   ├── migrations/                   # first migration = Prisma DDL + constraints.sql
+│   ├── migrations/                   # init = Prisma DDL + CHECKs, triggers, views, pg_trgm
 │   └── seed/
-│       ├── index.ts
+│       ├── index.ts                  # `pnpm db:seed` entry point
+│       ├── seed.ts                   # create-only, safe to re-run
 │       ├── business-profile.ts       # version 1, from the PRD
 │       └── catalog.ts                # 13 materials / 28 variants, rates & stock TODO
 ├── prisma.config.ts
@@ -393,6 +394,7 @@ SIH-PROJECT/
 │   │       └── health/route.ts
 │   ├── modules/                      # one folder per business area:
 │   │   ├── billing/                  #   service · schemas · queries · actions · components
+│   │   │   └── bill-number.ts        #   atomic bill-number allocation (A4)
 │   │   ├── returns/
 │   │   ├── payments/
 │   │   ├── inventory/
@@ -405,7 +407,9 @@ SIH-PROJECT/
 │   │   ├── search/
 │   │   └── audit/
 │   ├── domain/                       # pure rules, no I/O, exhaustively unit-tested
-│   │   ├── rental-days.ts            # A1
+│   │   ├── money.ts                  # whole paise, never floating-point rupees
+│   │   ├── rental-days.ts            # A1: IST calendar days, minimum 1
+│   │   ├── stock.ts                  # available = total − rented − held
 │   │   ├── pricing.ts                # estimates, batch amounts
 │   │   ├── settlement.ts             # balance, settlement status (A8)
 │   │   ├── bill-status.ts            # rental status from line totals
@@ -424,8 +428,7 @@ SIH-PROJECT/
 │   │   ├── permissions.ts            # role → permission map (A12)
 │   │   ├── action.ts                 # guard used by every server action
 │   │   ├── storage.ts                # private S3-compatible storage
-│   │   ├── dates.ts                  # IST helpers
-│   │   ├── money.ts
+│   │   ├── format.ts                 # ₹ and DD-MM-YYYY display formatting
 │   │   ├── errors.ts
 │   │   ├── env.ts
 │   │   └── logger.ts
@@ -433,6 +436,7 @@ SIH-PROJECT/
 ├── tests/
 │   ├── unit/
 │   ├── integration/                  # real PostgreSQL: DB guards, services, concurrency
+│   │   └── support/                  #   per-file throw-away databases, SQL fixtures
 │   └── e2e/                          # Playwright
 ├── docker-compose.yml                # PostgreSQL for local development
 ├── .env.example
@@ -451,7 +455,7 @@ Each phase ends with passing tests, a push to the working branch and a short sum
 | # | Phase | Scope | Done when |
 |---|---|---|---|
 | 1 | Project initialization | Next.js 16 + TypeScript (strict) + Tailwind + shadcn/ui; ESLint/Prettier; pnpm; typed env validation; Vitest and Playwright set up; Docker Compose PostgreSQL; GitHub Actions CI; replace the README; keep `docs/` | App runs locally; CI green |
-| 2 | Database schema | Move the approved schema to `prisma/`; first migration with `constraints.sql`; Prisma client (pg adapter); seed (profile v1, counter, 13 materials / 28 variants with TODO values); `src/domain/` rules with unit tests; the 103 DB scenarios as integration tests, plus parallel-connection concurrency tests | `migrate reset` + seed works; all tests pass |
+| 2 | Database schema | Move the approved schema to `prisma/`; first migration with the database rules (CHECKs, triggers, views); Prisma client (pg adapter); seed (profile v1, counter, 13 materials / 28 variants with TODO values); `src/domain/` rules with unit tests; the 103 DB scenarios as integration tests, plus parallel-connection concurrency tests | `migrate reset` + seed works; all tests pass |
 | 3 | Authentication & authorization | Better Auth (username + password), roles, permission map, action guard, audit writer, login page, first-admin script, user management (create staff, reset password, deactivate) | Signed-out users and staff are refused where they should be (tests) |
 | 4 | Application shell | Responsive layout (sidebar, top bar, mobile navigation), design tokens (one brand colour + neutrals + status colours), shared components (data table, badges, money/date formatting, quantity stepper, empty/error/loading states, toasts, confirmation dialogs) | Shell works on phone, tablet and desktop; accessibility checks pass |
 | 5 | Welcome & dashboard | Splash once per session → login → dashboard; quick actions; stat cards and Recent Activity on real queries, filled in as modules land | No data visible before login; stats correct for seeded data |
@@ -519,3 +523,4 @@ Any of these can be changed without affecting the database design.
 | 23 Sep 2026 | Analysis of PRD v1.0; decisions A1–A21 approved; implementation principles P1–P6 added; database design proposed and verified (DATABASE.md). |
 | 23 Sep 2026 | Second review: database design approved; generated-bill edits confirmed ADMIN-only with audit (A6); damaged/lost pieces confirmed at normal rent with no V1 penalty (A3). |
 | 23 Sep 2026 | Phase 1 done: Next.js 16.3 + TypeScript strict + Tailwind 4 + shadcn/ui foundation, design tokens, typed env, health check, security headers, Docker PostgreSQL, Vitest + Playwright tests, GitHub Actions CI. |
+| 23 Sep 2026 | Phase 2 done: Prisma 7 schema and init migration (19 tables, 10 enums, 58 CHECKs, 11 triggers, 4 views); pg-adapter client; atomic bill numbers; seed with the exact PRD catalog and no invented values; `src/domain/` rules; the 103 scenarios plus migration, seed, bill-number, concurrency, settlement and snapshot integration tests on real PostgreSQL in CI. `docs/database/constraints.sql` merged into the migration. |

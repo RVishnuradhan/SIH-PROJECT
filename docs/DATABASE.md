@@ -1,14 +1,15 @@
 # SMS Associates — Database Design (V1)
 
-**Status:** proposal for review · **Date:** 23 Sep 2026 · **Decisions:** see [ARCHITECTURE.md](ARCHITECTURE.md) (A1–A21)
+**Status:** approved and implemented (Phase 2) · **Date:** 23 Sep 2026 · **Decisions:** see [ARCHITECTURE.md](ARCHITECTURE.md) (A1–A21)
 
 | File | What it is |
 |---|---|
-| [`database/schema.prisma`](database/schema.prisma) | The Prisma schema (Prisma 7.10). Moves to `prisma/schema.prisma` in Phase 2. |
-| [`database/constraints.sql`](database/constraints.sql) | Rules Prisma's schema language can't express: CHECK constraints, the stock-ledger trigger, history guards and read-only views. Ships in the first migration. |
+| [`prisma/schema.prisma`](../prisma/schema.prisma) | The Prisma schema (Prisma 7.10): tables, enums, relations, indexes. |
+| [`prisma/migrations/20260923180000_init/migration.sql`](../prisma/migrations/20260923180000_init/migration.sql) | The first migration: the DDL Prisma generates from the schema, followed by the rules its schema language can't express — the `pg_trgm` extension, CHECK constraints, the stock-ledger trigger, history guards and read-only views. |
+| [`prisma/seed/`](../prisma/seed) | The seed: bill header version 1, the bill-number counter, and the catalog (§10). |
 | [`database/erd.png`](database/erd.png) | Rendered copy of the ER diagram below. |
 
-Both files have been validated. The schema passes `prisma validate`, and the generated SQL plus `constraints.sql` was run on PostgreSQL 18 with a 103-scenario test suite (§11).
+The design was validated on PostgreSQL 18 with a 103-scenario suite before implementation. Those scenarios, and the tests added in Phase 2, now run against real PostgreSQL on every CI run (§11).
 
 ---
 
@@ -427,37 +428,23 @@ Everything is counted in whole pieces. The first admin account is created by a o
 
 ## 11. Verification
 
-1. `prisma validate` and `prisma format --check` pass with Prisma 7.10 (the current stable release; 8.0 is still a release candidate).
-2. `prisma migrate diff --from-empty` generates 19 tables, 10 enum types, 46 indexes and 38 foreign keys.
-3. That SQL, followed by `constraints.sql`, runs cleanly on **PostgreSQL 18** (PGlite).
-4. A **103-scenario suite** passed. It covers the SMS-000001 walk-through above plus every guard:
-   - no direct stock edits, and inventory rows that start at zero
-   - overselling refused, with the whole generation rolled back
-   - stock never below what is out
-   - returns ≤ taken, and batch amount = qty × rate × days
-   - a note required for damaged or lost pieces
-   - duplicate return submissions refused
-   - returns only voidable, not editable
-   - lines, rates, customer snapshot and taking date locked after generation
-   - bills never deleted, and never back to draft
-   - site location, notes and expected days still editable
-   - bill number tied to its sequence, and widening past 999999
-   - counter only moving forward
-   - payment amounts immutable and payments undeletable
-   - valid status transitions only, with reasons required
-   - pending money never counted as received
-   - discount rules
-   - held-stock release and write-off
-   - void with stock reversal, cancellation final, archive rules
-   - append-only ledgers
-   - profile versioning keeping old bills on version 1
-   - ID proofs always sensitive
-   - Tamil text and `3 × 1½` stored exactly
-   - trigram search finding "Sanjiv" → "Shanjiv"
-   - IST day counting (a return at 00:30 counts as the new day, where UTC would undercount)
-   - all three discrepancy views empty at the end
+**Design stage.** `prisma validate` and `prisma format --check` pass with Prisma 7.10 (the current stable release; 8.0 is still a release candidate). The DDL Prisma generates (19 tables, 10 enum types, 46 indexes, 38 foreign keys) plus the rules ran cleanly on PostgreSQL 18, with a 103-scenario suite.
 
-Phase 2 turns this suite into the project's integration tests. It will run against a real PostgreSQL server, adding tests with parallel connections for two staff billing the last pieces at the same moment.
+**Permanent tests (Phase 2).** Integration tests run against a real PostgreSQL server: PostgreSQL 17 in CI, and any local server via `DATABASE_URL`. The test run applies the real migrations with `prisma migrate deploy` to a template database. Each test file then gets its own copy, which is dropped afterwards. Nothing touches the development database's data.
+
+| Suite (`tests/integration/`) | What it proves |
+|---|---|
+| `database-rules.test.ts` | The **103 validated scenarios**, in SQL. They cover the SMS-000001 walk-through (§9) plus every guard: <br>• no direct stock edits; inventory rows start at zero<br>• overselling refused and the whole generation rolled back; stock never below what is out<br>• returns ≤ taken; batch amount = qty × rate × days; a note required for damaged or lost pieces; duplicate return submissions refused<br>• returns can be voided, not edited<br>• lines, rates, customer snapshot and taking date locked after generation; bills never deleted and never back to draft; site location, notes and expected days still editable<br>• bill number tied to its sequence and widening past 999999; the counter only moves forward<br>• payment amounts immutable and payments undeletable; valid status transitions only, with reasons; pending money never counted as received; discount rules<br>• held-stock release and write-off; void with stock reversal; cancellation final; archive rules<br>• append-only ledgers; profile versioning; ID proofs always sensitive<br>• Tamil text and `3 × 1½` stored exactly; trigram search ("Sanjiv" → "Shanjiv"); IST day counting<br>• all three discrepancy views empty at the end |
+| `migrations.test.ts` | The migration builds exactly the design: 19 tables, 10 enums, 58 CHECKs, 38 foreign keys, 11 triggers, 4 views, `pg_trgm` and its indexes. `prisma migrate diff` finds **no drift** between the migrated database and `schema.prisma`, and `prisma migrate status` reports it up to date. |
+| `seed.test.ts` | The exact PRD catalog: 13 materials and 28 variants, in PRD order, spelled as in the PRD ("Earthramer"). No rates, thresholds or stock. Profile v1 "Rental Bill"; counter at 0; safe to re-run, and never overwrites values entered later. |
+| `bill-number.test.ts` | `allocateBillNumber` through Prisma: SMS-000001 onwards. A failed save doesn't use up a number. **30 concurrent saves**, a third of them failing, get consecutive numbers with no gaps. Numbers widen to SMS-1000000; the counter can't move back. |
+| `concurrency.test.ts` | Real overlapping transactions on separate connections:<br>• two bills for the last pieces: the second waits for the first's lock, then is refused<br>• 10 bills racing for 20 pieces: exactly 6 × 3 succeed<br>• bills listing materials in opposite orders: no deadlock<br>• double-submitted and simultaneous returns of the same pieces: only one counted<br>• 20 simultaneous adjustments: none lost<br>• simultaneous write-downs: never below what is out<br>• ledgers consistent afterwards |
+| `settlement.test.ts` | The `bill_financials` view equals the domain calculation (`src/domain/settlement.ts`) on every bill. The rental and settlement statuses follow the rules through:<br>• the §9 example (₹590 − ₹500 → ₹90 due → settled)<br>• PRD §37 refund (₹500 − ₹350) and §38 extra (₹650 − ₹500)<br>• a "Payment Not Yet" advance, and a ₹0 advance<br>• a voided return; an admin discount<br>• a voided generated bill (advance → refund due); a cancelled draft |
+| `snapshots.test.ts` | Through Prisma: customer, material, rate and bill-header snapshots stay unchanged after the master data changes. Changing a snapshot, line, rate or profile version is refused. An admin edit of notes, site and expected days succeeds, with an append-only audit entry. A stale edit is refused (optimistic locking). |
+
+The pure rules (money in paise, IST day counting, pricing, stock, statuses, settlement, bill-number format, phone normalisation) have unit tests in `tests/unit/domain/`.
+
+**Limits of what the database enforces.** The database can't know who the signed-in user is. ADMIN-only actions — voids, discounts, edits of a generated bill, stock adjustments — are enforced by the permission check in each server action (Phase 3 onwards), and written to the audit log in the same transaction. Rules that span several rows (for example "void the newest return first", or "a bill can be voided only after its returns are voided") are enforced by the services that perform them (Phases 9–12). The database still refuses any result that would leave stock, returns or money inconsistent.
 
 ## 12. Indexes and search (A17)
 

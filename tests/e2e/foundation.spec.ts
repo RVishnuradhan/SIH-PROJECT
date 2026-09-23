@@ -68,7 +68,11 @@ test.describe("platform", () => {
     const response = await request.get("/api/health");
     expect(response.status()).toBe(200);
     expect(response.headers()["cache-control"]).toContain("no-store");
-    expect(await response.json()).toMatchObject({ status: "ok", service: "sms-associates" });
+    expect(await response.json()).toMatchObject({
+      status: "ok",
+      service: "sms-associates",
+      database: "ok",
+    });
   });
 
   test("shows a branded 404 page that leads back to the start", async ({ page }) => {
