@@ -1,0 +1,662 @@
+// =============================================================================
+// SMS Associates — Centering Materials Rental & Inventory Management System
+// Database schema — PROPOSAL FOR REVIEW
+//
+// Phase 2 moves this file to prisma/schema.prisma. Rules that Prisma's schema
+// language cannot express (CHECK constraints, the stock-ledger trigger, the
+// append-only and lock guards, the pg_trgm extension) live in
+// docs/database/constraints.sql and ship in the same first migration.
+// Design notes: docs/DATABASE.md.
+//
+// Conventions
+//   • PostgreSQL tables and columns are snake_case (@@map / @map).
+//   • Our primary keys are UUIDv7; the auth tables use Better Auth's string ids.
+//   • Money is Decimal(12,2) and daily rates Decimal(10,2) — never floating point.
+//     Quantities are whole pieces (Int).
+//   • Timestamps are timestamptz. Business dates follow the Asia/Kolkata calendar.
+//   • Nothing that records money or stock is ever hard-deleted.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+/// Where the materials on a bill are. Kept separate from money (decision A8).
+enum RentalStatus {
+  DRAFT // wizard in progress; bill number already assigned; no stock moved
+  ACTIVE // generated; materials are out
+  PARTIALLY_RETURNED // some pieces accounted for, some still out
+  RETURNED // every piece returned, damaged or reported lost
+  CANCELLED // draft cancelled, or generated bill voided by an admin
+
+  @@map("rental_status")
+}
+
+/// Where the money on a bill stands (decision A8). Derived from the payment
+/// ledger and recomputed in the same transaction as every return or payment.
+enum SettlementStatus {
+  NO_DUE // nothing owed either way right now
+  PAYMENT_PENDING // materials still out and a promised payment has not been received
+  ADDITIONAL_DUE // final charges exceed what was paid
+  REFUND_DUE // what was paid exceeds final charges
+  SETTLED // final charges and payments match
+
+  @@map("settlement_status")
+}
+
+/// How rental days are counted (decision A1). Stored on every bill, so a later
+/// rule change never alters an old bill.
+enum DayCountRule {
+  CALENDAR_DAYS_MIN_1 // return date − taking date on the Asia/Kolkata calendar, minimum 1
+
+  @@map("day_count_rule")
+}
+
+enum ReturnCondition {
+  GOOD // shown as "Returned"
+  DAMAGED
+  LOST
+
+  @@map("return_condition")
+}
+
+enum PaymentType {
+  ADVANCE // money in, taken when the bill is generated
+  ADDITIONAL // money in, taken later (usually at the final return)
+  REFUND // money out, paid back to the customer
+  DISCOUNT // not money: an admin waiver that reduces what is owed (reason required)
+
+  @@map("payment_type")
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+
+  @@map("payment_method")
+}
+
+enum PaymentStatus {
+  PENDING // promised, not received ("Payment Not Yet"); never counted as received
+  COMPLETED // money actually changed hands (or the discount applies)
+  CANCELLED // entered in error or promise withdrawn; excluded from every total
+
+  @@map("payment_status")
+}
+
+/// Non-rental charges. Part of the data model from V1 so that damage/loss
+/// charging can be added later without a redesign. V1 has no screen for it.
+enum ChargeType {
+  DAMAGE
+  LOSS
+  OTHER
+
+  @@map("charge_type")
+}
+
+enum DocumentType {
+  PHOTO
+  ID_PROOF
+  OTHER
+
+  @@map("document_type")
+}
+
+/// Every kind of stock movement and its fixed effect on the three counters —
+/// total (owned), rented (with customers) and held (damaged/lost awaiting an
+/// admin). A CHECK constraint enforces these effects (constraints.sql).
+///
+///   type                   total  rented  held      caused by
+///   INITIAL_STOCK          +n                       admin
+///   MANUAL_ADJUSTMENT      ±n                       admin: purchase, scrap, stock-count correction
+///   RENTAL_OUT                    +n                bill generated
+///   RETURN_IN                     −n                returned in good condition
+///   RETURN_TO_HOLD                −n      +n        returned damaged / reported lost
+///   HOLD_RELEASE                          −n        admin: usable again / found
+///   HOLD_WRITE_OFF         −n             −n        admin: scrapped / confirmed lost
+///   BILL_VOID_REVERSAL            −n                admin voided a generated bill
+///   RETURN_VOID_REVERSAL          +n      −n or 0   admin voided a return
+enum InventoryTransactionType {
+  INITIAL_STOCK
+  MANUAL_ADJUSTMENT
+  RENTAL_OUT
+  RETURN_IN
+  RETURN_TO_HOLD
+  HOLD_RELEASE
+  HOLD_WRITE_OFF
+  BILL_VOID_REVERSAL
+  RETURN_VOID_REVERSAL
+
+  @@map("inventory_transaction_type")
+}
+
+// ─── Users and authentication (Better Auth) ─────────────────────────────────
+// Fields required by Better Auth with its username and admin plugins. Phase 3
+// reconciles this block with Better Auth's CLI output; the role values and the
+// "who did what" back-relations are ours. Users are deactivated, never deleted.
+
+model User {
+  id              String    @id
+  name            String
+  email           String    @unique // required by Better Auth; staff sign in with username
+  emailVerified   Boolean   @default(false) @map("email_verified")
+  image           String?
+  username        String?   @unique
+  displayUsername String?   @map("display_username")
+  role            String    @default("staff") // "admin" | "staff" (CHECK)
+  banned          Boolean   @default(false) // shown as "Deactivated"
+  banReason       String?   @map("ban_reason")
+  banExpires      DateTime? @map("ban_expires") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions Session[]
+  accounts Account[]
+
+  customersCreated      Customer[]             @relation("CustomerCreatedBy")
+  customersArchived     Customer[]             @relation("CustomerArchivedBy")
+  documentsUploaded     CustomerDocument[]
+  businessProfiles      BusinessProfile[]
+  billsCreated          Bill[]                 @relation("BillCreatedBy")
+  billsGenerated        Bill[]                 @relation("BillGeneratedBy")
+  billsCancelled        Bill[]                 @relation("BillCancelledBy")
+  billsArchived         Bill[]                 @relation("BillArchivedBy")
+  returnsProcessed      RentalReturn[]         @relation("ReturnProcessedBy")
+  returnsVoided         RentalReturn[]         @relation("ReturnVoidedBy")
+  paymentsRecorded      Payment[]              @relation("PaymentRecordedBy")
+  paymentsStatusChanged Payment[]              @relation("PaymentStatusChangedBy")
+  chargesCreated        BillCharge[]           @relation("ChargeCreatedBy")
+  chargesVoided         BillCharge[]           @relation("ChargeVoidedBy")
+  inventoryTransactions InventoryTransaction[]
+  auditLogs             AuditLog[]
+
+  @@map("users")
+}
+
+model Session {
+  id             String   @id
+  token          String   @unique
+  userId         String   @map("user_id")
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz(3)
+  ipAddress      String?  @map("ip_address")
+  userAgent      String?  @map("user_agent")
+  impersonatedBy String?  @map("impersonated_by")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  userId                String    @map("user_id")
+  password              String? // hash written by Better Auth
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  idToken               String?   @map("id_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at") @db.Timestamptz(3)
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at") @db.Timestamptz(3)
+  scope                 String?
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+// ─── Business profile and numbering ─────────────────────────────────────────
+
+/// The company header printed on bills. Append-only: saving the profile in
+/// Settings inserts a new version, and each bill keeps the version it was
+/// generated with — so company details changing later never alter old bills.
+model BusinessProfile {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  version      Int      @unique
+  name         String // "SMS ASSOCIATES"
+  tagline      String // "Centering Materials Suppliers"
+  addressLines String[] @map("address_lines") // ["101-A, Karungalmedu", "Kunnathur - 638 103."]
+  phones       String[] // ["9865276111", "9487270111"]
+  billTitle    String   @default("Rental Bill") @map("bill_title")
+  logoKey      String?  @map("logo_key") // null = text logo
+  createdById  String?  @map("created_by_id") // null only for the seeded first version
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  createdBy User?  @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  bills     Bill[]
+
+  @@map("business_profiles")
+}
+
+/// Gap-free counters. A value is taken inside the same transaction that uses
+/// it, so a failed save never skips a number and a number is never reused.
+/// key "bill_number" → SMS-000001, SMS-000002, …
+model Counter {
+  key       String   @id
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("counters")
+}
+
+// ─── Customers ──────────────────────────────────────────────────────────────
+
+/// Phone numbers are not unique (decision A10). Customers with bills are
+/// archived, never deleted.
+model Customer {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  name          String
+  phone         String // normalised 10-digit Indian mobile, e.g. "9865276111"
+  location      String // the customer's own home/business location (decision A11)
+  occupation    String?
+  createdById   String    @map("created_by_id")
+  archivedAt    DateTime? @map("archived_at") @db.Timestamptz(3)
+  archivedById  String?   @map("archived_by_id")
+  archiveReason String?   @map("archive_reason")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy             User                   @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  archivedBy            User?                  @relation("CustomerArchivedBy", fields: [archivedById], references: [id], onDelete: Restrict)
+  documents             CustomerDocument[]
+  bills                 Bill[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@index([phone])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "customers_name_trgm_idx")
+  @@index([location(ops: raw("gin_trgm_ops"))], type: Gin, map: "customers_location_trgm_idx")
+  @@index([createdAt])
+  @@map("customers")
+}
+
+/// Metadata only; the file lives in private object storage. ID proofs are
+/// sensitive: only admins can open them. An admin may delete a document
+/// permanently (file and row); the deletion is written to the audit log.
+model CustomerDocument {
+  id           String       @id @default(uuid(7)) @db.Uuid
+  customerId   String       @map("customer_id") @db.Uuid
+  type         DocumentType
+  label        String? // e.g. "Aadhaar (masked)"
+  isSensitive  Boolean      @map("is_sensitive")
+  storageKey   String       @unique @map("storage_key")
+  fileName     String       @map("file_name")
+  mimeType     String       @map("mime_type")
+  sizeBytes    Int          @map("size_bytes")
+  sha256       String
+  uploadedById String       @map("uploaded_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  uploadedBy User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([customerId, createdAt])
+  @@map("customer_documents")
+}
+
+// ─── Material catalog ───────────────────────────────────────────────────────
+
+/// Catalog data, managed in Settings — adding materials needs no code change.
+/// Names use the exact PRD spellings. Deactivated, never deleted, once used.
+model Material {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  name        String   @unique
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  variants MaterialVariant[]
+
+  @@map("materials")
+}
+
+/// Every rate, stock level and bill line hangs off a variant. Materials without
+/// variants (Earthramer, Vibrator, Spanner, Bolt) have one variant whose name
+/// is "" (printed as "—"). A null rate or threshold means "not configured yet":
+/// such a variant cannot be billed until an admin sets its rate (decision A15).
+model MaterialVariant {
+  id                String   @id @default(uuid(7)) @db.Uuid
+  materialId        String   @map("material_id") @db.Uuid
+  variantName       String   @default("") @map("variant_name")
+  ratePerDay        Decimal? @map("rate_per_day") @db.Decimal(10, 2)
+  lowStockThreshold Int?     @map("low_stock_threshold")
+  sortOrder         Int      @default(0) @map("sort_order")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  material              Material               @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  inventory             Inventory?
+  billItems             BillItem[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([materialId, variantName])
+  @@index([materialId, sortOrder])
+  @@map("material_variants")
+}
+
+// ─── Inventory ──────────────────────────────────────────────────────────────
+
+/// Current stock counters for one variant. Never written directly: a database
+/// trigger applies every InventoryTransaction to these counters, and CHECK
+/// constraints keep them valid (rented + held ≤ total, nothing negative).
+///   available = totalQuantity − rentedQuantity − heldQuantity  (computed, not stored)
+model Inventory {
+  variantId      String   @id @map("variant_id") @db.Uuid
+  totalQuantity  Int      @default(0) @map("total_quantity") // owned pieces
+  rentedQuantity Int      @default(0) @map("rented_quantity") // with customers now
+  heldQuantity   Int      @default(0) @map("held_quantity") // damaged/lost, awaiting an admin
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(3) // set by the trigger
+
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@map("inventory")
+}
+
+/// Append-only stock ledger: one row per movement, never updated or deleted.
+///   total = Σ totalDelta · rented = Σ rentedDelta · held = Σ heldDelta
+/// occurredAt is business time (e.g. the taking time of a back-dated paper
+/// bill); createdAt is when the row was entered.
+model InventoryTransaction {
+  id           String                   @id @default(uuid(7)) @db.Uuid
+  variantId    String                   @map("variant_id") @db.Uuid
+  type         InventoryTransactionType
+  totalDelta   Int                      @default(0) @map("total_delta")
+  rentedDelta  Int                      @default(0) @map("rented_delta")
+  heldDelta    Int                      @default(0) @map("held_delta")
+  occurredAt   DateTime                 @map("occurred_at") @db.Timestamptz(3)
+  billId       String?                  @map("bill_id") @db.Uuid
+  billItemId   String?                  @map("bill_item_id") @db.Uuid
+  returnId     String?                  @map("return_id") @db.Uuid
+  returnItemId String?                  @map("return_item_id") @db.Uuid
+  customerId   String?                  @map("customer_id") @db.Uuid
+  reason       String? // required for admin movements (CHECK)
+  createdById  String                   @map("created_by_id")
+  createdAt    DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  variant      MaterialVariant   @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  bill         Bill?             @relation(fields: [billId], references: [id], onDelete: Restrict)
+  billItem     BillItem?         @relation(fields: [billItemId], references: [id], onDelete: Restrict)
+  rentalReturn RentalReturn?     @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  returnItem   RentalReturnItem? @relation(fields: [returnItemId], references: [id], onDelete: Restrict)
+  customer     Customer?         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy    User              @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([variantId, occurredAt])
+  @@index([billId])
+  @@index([returnId])
+  @@index([type, occurredAt])
+  @@map("inventory_transactions")
+}
+
+// ─── Bills ──────────────────────────────────────────────────────────────────
+
+/// One rental. Created as DRAFT when wizard step 1 is saved; the bill number is
+/// assigned then and never reused. Generating the bill (→ ACTIVE) freezes its
+/// lines, rates and snapshots. Returns update this same bill; its number never
+/// changes. Bills are never deleted: drafts are cancelled, generated bills are
+/// voided (admin, with reason), and finished bills can be archived (admin).
+model Bill {
+  id               String           @id @default(uuid(7)) @db.Uuid
+  billSeq          Int              @unique @map("bill_seq") // 1, 2, 3 …
+  billNumber       String           @unique @map("bill_number") // "SMS-000001"
+  status           RentalStatus     @default(DRAFT)
+  settlementStatus SettlementStatus @default(NO_DUE) @map("settlement_status")
+  customerId       String           @map("customer_id") @db.Uuid
+
+  // Rental details. After generation only siteLocation, notes and expectedDays
+  // can change (admin, audited); the database refuses anything else.
+  takenAt            DateTime @map("taken_at") @db.Timestamptz(3) // taking date + time (entered in IST)
+  expectedDays       Int      @map("expected_days")
+  expectedReturnDate DateTime @map("expected_return_date") @db.Date // IST date of takenAt + expectedDays
+  siteLocation       String   @map("site_location") // where the materials go (decision A11)
+  notes              String?
+  paperBillNumber    String?  @map("paper_bill_number") // for rentals entered from paper records (A14)
+
+  // Snapshots: copied from master data at generation, frozen afterwards.
+  customerName      String       @map("customer_name")
+  customerPhone     String       @map("customer_phone")
+  customerLocation  String       @map("customer_location")
+  businessProfileId String       @map("business_profile_id") @db.Uuid
+  dayCountRule      DayCountRule @default(CALENDAR_DAYS_MIN_1) @map("day_count_rule")
+  timeZone          String       @default("Asia/Kolkata") @map("time_zone")
+  estimatedAmount   Decimal      @default(0) @map("estimated_amount") @db.Decimal(12, 2) // Σ quantity × rate × expectedDays
+
+  // Wizard step 3 input, kept only while DRAFT. Generation turns it into an
+  // ADVANCE payment and clears these fields (CHECK: null unless DRAFT).
+  draftAdvanceAmount    Decimal?       @map("draft_advance_amount") @db.Decimal(12, 2)
+  draftAdvanceMethod    PaymentMethod? @map("draft_advance_method")
+  draftAdvanceReceived  Boolean?       @map("draft_advance_received") // true = "Payment Finished"
+  draftAdvanceReference String?        @map("draft_advance_reference") // UPI reference
+
+  // Lifecycle
+  version       Int       @default(1) // optimistic locking: every update increments it
+  createdById   String    @map("created_by_id")
+  generatedAt   DateTime? @map("generated_at") @db.Timestamptz(3)
+  generatedById String?   @map("generated_by_id")
+  cancelledAt   DateTime? @map("cancelled_at") @db.Timestamptz(3)
+  cancelledById String?   @map("cancelled_by_id")
+  cancelReason  String?   @map("cancel_reason") // required when voiding a generated bill
+  archivedAt    DateTime? @map("archived_at") @db.Timestamptz(3)
+  archivedById  String?   @map("archived_by_id")
+  archiveReason String?   @map("archive_reason")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  customer        Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Restrict)
+  createdBy       User            @relation("BillCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  generatedBy     User?           @relation("BillGeneratedBy", fields: [generatedById], references: [id], onDelete: Restrict)
+  cancelledBy     User?           @relation("BillCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  archivedBy      User?           @relation("BillArchivedBy", fields: [archivedById], references: [id], onDelete: Restrict)
+
+  items                 BillItem[]
+  returns               RentalReturn[]
+  payments              Payment[]
+  charges               BillCharge[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@index([customerId, takenAt])
+  @@index([status, expectedReturnDate])
+  @@index([settlementStatus])
+  @@index([takenAt])
+  @@index([customerPhone])
+  @@index([customerName(ops: raw("gin_trgm_ops"))], type: Gin, map: "bills_customer_name_trgm_idx")
+  @@index([siteLocation(ops: raw("gin_trgm_ops"))], type: Gin, map: "bills_site_location_trgm_idx")
+  @@map("bills")
+}
+
+/// One material variant on a bill. Quantity, rate and names are frozen once the
+/// bill is generated. The three return totals are kept in step with the return
+/// batches in the same transaction; a CHECK stops them exceeding the quantity.
+///   pending = quantity − returnedQuantity − damagedQuantity − lostQuantity
+model BillItem {
+  id               String  @id @default(uuid(7)) @db.Uuid
+  billId           String  @map("bill_id") @db.Uuid
+  lineNo           Int     @map("line_no")
+  variantId        String  @map("variant_id") @db.Uuid
+  materialName     String  @map("material_name") // snapshot
+  variantName      String  @map("variant_name") // snapshot ("" = no variant)
+  quantity         Int
+  ratePerDay       Decimal @map("rate_per_day") @db.Decimal(10, 2) // snapshot
+  estimatedAmount  Decimal @map("estimated_amount") @db.Decimal(12, 2) // quantity × rate × bill.expectedDays
+  returnedQuantity Int     @default(0) @map("returned_quantity") // back in good condition
+  damagedQuantity  Int     @default(0) @map("damaged_quantity")
+  lostQuantity     Int     @default(0) @map("lost_quantity")
+
+  bill                  Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
+  variant               MaterialVariant        @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  returnItems           RentalReturnItem[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([billId, variantId])
+  @@unique([billId, lineNo])
+  @@index([variantId])
+  @@map("bill_items")
+}
+
+// ─── Returns ────────────────────────────────────────────────────────────────
+
+/// One return event (batch) against a bill; a bill can have many. Each keeps
+/// its own date and time. A return is never edited or deleted — an admin can
+/// void the latest one, which reverses its stock movements.
+model RentalReturn {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  billId         String    @map("bill_id") @db.Uuid
+  returnNo       Int       @map("return_no") // 1, 2, 3 … within the bill
+  returnedAt     DateTime  @map("returned_at") @db.Timestamptz(3) // return date + time (entered in IST)
+  notes          String?
+  idempotencyKey String    @unique @map("idempotency_key") @db.Uuid // stops a double submit
+  processedById  String    @map("processed_by_id")
+  voidedAt       DateTime? @map("voided_at") @db.Timestamptz(3)
+  voidedById     String?   @map("voided_by_id")
+  voidReason     String?   @map("void_reason")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  bill                  Bill                   @relation(fields: [billId], references: [id], onDelete: Restrict)
+  processedBy           User                   @relation("ReturnProcessedBy", fields: [processedById], references: [id], onDelete: Restrict)
+  voidedBy              User?                  @relation("ReturnVoidedBy", fields: [voidedById], references: [id], onDelete: Restrict)
+  items                 RentalReturnItem[]
+  payments              Payment[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([billId, returnNo])
+  @@index([billId, returnedAt])
+  @@index([returnedAt])
+  @@map("returns")
+}
+
+/// How many pieces of one bill line came back in one batch, in what condition,
+/// and what that batch costs: quantity × rate × chargeableDays (CHECKed).
+/// Damaged and lost pieces are charged rent up to the return date like any
+/// other batch; extra damage/loss charges go in BillCharge (not used in V1).
+model RentalReturnItem {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  returnId       String          @map("return_id") @db.Uuid
+  billItemId     String          @map("bill_item_id") @db.Uuid
+  condition      ReturnCondition
+  quantity       Int
+  chargeableDays Int             @map("chargeable_days")
+  ratePerDay     Decimal         @map("rate_per_day") @db.Decimal(10, 2) // copied from the bill line
+  amount         Decimal         @db.Decimal(12, 2)
+  note           String? // required for DAMAGED and LOST
+
+  rentalReturn          RentalReturn           @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  billItem              BillItem               @relation(fields: [billItemId], references: [id], onDelete: Restrict)
+  charges               BillCharge[]
+  inventoryTransactions InventoryTransaction[]
+
+  @@unique([returnId, billItemId, condition])
+  @@index([billItemId])
+  @@map("return_items")
+}
+
+// ─── Money ──────────────────────────────────────────────────────────────────
+
+/// The money ledger. Each payment, refund or discount is its own row. Rows are
+/// never deleted and their amount, type and bill never change; only the status
+/// moves PENDING → COMPLETED or CANCELLED, or COMPLETED → CANCELLED (admin, with
+/// a reason). Totals and balances are always calculated from these rows.
+model Payment {
+  id                   String         @id @default(uuid(7)) @db.Uuid
+  billId               String         @map("bill_id") @db.Uuid
+  type                 PaymentType
+  status               PaymentStatus
+  amount               Decimal        @db.Decimal(12, 2) // always > 0; the type gives the direction
+  method               PaymentMethod? // required except for DISCOUNT
+  transactionReference String?        @map("transaction_reference") // optional UPI reference
+  note                 String? // required for DISCOUNT
+  receivedAt           DateTime?      @map("received_at") @db.Timestamptz(3) // when the money changed hands
+  returnId             String?        @map("return_id") @db.Uuid // recorded as part of this return
+  idempotencyKey       String         @unique @map("idempotency_key") @db.Uuid
+  recordedById         String         @map("recorded_by_id")
+  statusChangedAt      DateTime?      @map("status_changed_at") @db.Timestamptz(3)
+  statusChangedById    String?        @map("status_changed_by_id")
+  statusChangeReason   String?        @map("status_change_reason") // required when CANCELLED
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  bill            Bill          @relation(fields: [billId], references: [id], onDelete: Restrict)
+  rentalReturn    RentalReturn? @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  recordedBy      User          @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  statusChangedBy User?         @relation("PaymentStatusChangedBy", fields: [statusChangedById], references: [id], onDelete: Restrict)
+
+  @@index([billId, createdAt])
+  @@index([status, type])
+  @@index([receivedAt])
+  @@map("payments")
+}
+
+/// Non-rental charges on a bill (damage, loss, other). In the model so future
+/// damage/loss charging needs no redesign; V1 has no screen that creates them.
+model BillCharge {
+  id           String     @id @default(uuid(7)) @db.Uuid
+  billId       String     @map("bill_id") @db.Uuid
+  type         ChargeType
+  amount       Decimal    @db.Decimal(12, 2)
+  description  String
+  returnItemId String?    @map("return_item_id") @db.Uuid // the damaged/lost batch it relates to
+  createdById  String     @map("created_by_id")
+  voidedAt     DateTime?  @map("voided_at") @db.Timestamptz(3)
+  voidedById   String?    @map("voided_by_id")
+  voidReason   String?    @map("void_reason")
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  bill       Bill              @relation(fields: [billId], references: [id], onDelete: Restrict)
+  returnItem RentalReturnItem? @relation(fields: [returnItemId], references: [id], onDelete: Restrict)
+  createdBy  User              @relation("ChargeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  voidedBy   User?             @relation("ChargeVoidedBy", fields: [voidedById], references: [id], onDelete: Restrict)
+
+  @@index([billId])
+  @@map("bill_charges")
+}
+
+// ─── Audit ──────────────────────────────────────────────────────────────────
+
+/// Append-only record of important actions, written in the same transaction as
+/// the change. Also feeds "Recent Activity" on the dashboard. Never stores
+/// document contents or full ID numbers.
+model AuditLog {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  actorId    String?  @map("actor_id") // null for seed/system actions
+  action     String // e.g. "bill.generated", "return.processed", "inventory.adjusted"
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  summary    String // e.g. "Generated SMS-000124 for Shanjiv"
+  changes    Json? // { field: { from, to } }
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
