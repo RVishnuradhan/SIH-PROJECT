@@ -1,0 +1,166 @@
+@import "tailwindcss";
+
+/*
+ * SMS Associates design tokens.
+ *
+ * One primary brand colour (navy-indigo), supporting neutrals, and a distinct
+ * colour for each important state (PRD §59): Active, Pending, Returned,
+ * Warning, Error, Success. Every status text colour meets WCAG AA contrast on
+ * its soft background, and states are always paired with a label or icon —
+ * never colour alone.
+ *
+ * Dark mode is a later feature (PRD §71). The variant is declared so components
+ * can add `dark:` styles, but V1 ships only the light palette.
+ */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans:
+    var(--font-inter), var(--font-tamil), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-status-active: var(--status-active);
+  --color-status-active-soft: var(--status-active-soft);
+  --color-status-active-border: var(--status-active-border);
+  --color-status-active-solid: var(--status-active-solid);
+  --color-status-pending: var(--status-pending);
+  --color-status-pending-soft: var(--status-pending-soft);
+  --color-status-pending-border: var(--status-pending-border);
+  --color-status-pending-solid: var(--status-pending-solid);
+  --color-status-returned: var(--status-returned);
+  --color-status-returned-soft: var(--status-returned-soft);
+  --color-status-returned-border: var(--status-returned-border);
+  --color-status-returned-solid: var(--status-returned-solid);
+  --color-status-success: var(--status-success);
+  --color-status-success-soft: var(--status-success-soft);
+  --color-status-success-border: var(--status-success-border);
+  --color-status-success-solid: var(--status-success-solid);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-soft: var(--status-warning-soft);
+  --color-status-warning-border: var(--status-warning-border);
+  --color-status-warning-solid: var(--status-warning-solid);
+  --color-status-error: var(--status-error);
+  --color-status-error-soft: var(--status-error-soft);
+  --color-status-error-border: var(--status-error-border);
+  --color-status-error-solid: var(--status-error-solid);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+
+  /* Neutrals */
+  --background: oklch(0.985 0.003 260);
+  --foreground: oklch(0.22 0.03 262);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.03 262);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.03 262);
+  --muted: oklch(0.96 0.006 260);
+  --muted-foreground: oklch(0.5 0.025 258);
+  --border: oklch(0.915 0.008 260);
+  --input: oklch(0.88 0.01 260);
+
+  /* Brand */
+  --primary: oklch(0.4 0.12 265);
+  --primary-foreground: oklch(0.985 0.003 260);
+  --secondary: oklch(0.955 0.012 265);
+  --secondary-foreground: oklch(0.3 0.06 265);
+  --accent: oklch(0.955 0.012 265);
+  --accent-foreground: oklch(0.3 0.06 265);
+  --ring: oklch(0.55 0.13 265);
+  --destructive: oklch(0.5 0.19 25);
+  --destructive-foreground: oklch(0.985 0.003 260);
+
+  /* Status: text · soft background · border · solid (dots, icons, charts) */
+  --status-active: oklch(0.45 0.108 245);
+  --status-active-soft: oklch(0.965 0.014 245);
+  --status-active-border: oklch(0.88 0.05 245);
+  --status-active-solid: oklch(0.6 0.144 245);
+
+  --status-pending: oklch(0.47 0.094 75);
+  --status-pending-soft: oklch(0.968 0.021 75);
+  --status-pending-border: oklch(0.88 0.06 75);
+  --status-pending-solid: oklch(0.7 0.14 75);
+
+  --status-returned: oklch(0.46 0.077 185);
+  --status-returned-soft: oklch(0.965 0.035 185);
+  --status-returned-border: oklch(0.88 0.06 185);
+  --status-returned-solid: oklch(0.62 0.104 185);
+
+  --status-success: oklch(0.46 0.12 150);
+  --status-success-soft: oklch(0.965 0.035 150);
+  --status-success-border: oklch(0.88 0.06 150);
+  --status-success-solid: oklch(0.62 0.162 150);
+
+  --status-warning: oklch(0.48 0.121 50);
+  --status-warning-soft: oklch(0.965 0.015 50);
+  --status-warning-border: oklch(0.88 0.057 50);
+  --status-warning-solid: oklch(0.65 0.163 50);
+
+  --status-error: oklch(0.47 0.16 25);
+  --status-error-soft: oklch(0.965 0.014 25);
+  --status-error-border: oklch(0.88 0.051 25);
+  --status-error-solid: oklch(0.58 0.19 25);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings:
+      "cv11" 1,
+      "ss01" 1;
+  }
+
+  /* A visible keyboard focus ring everywhere (WCAG 2.4.7). */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+}
+
+/* Respect the user's reduced-motion preference (PRD §60). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

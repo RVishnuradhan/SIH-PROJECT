@@ -1,0 +1,24 @@
+# Local development database only — production uses managed PostgreSQL.
+#   Start: pnpm db:up    Stop: pnpm db:down    (data persists in the db-data volume)
+name: sms-associates
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sms_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-sms_associates}
+    ports:
+      # Bound to localhost only; never exposed on the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db-data:

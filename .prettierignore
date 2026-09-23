@@ -1,0 +1,17 @@
+# Dependencies and build output
+pnpm-lock.yaml
+.next/
+out/
+build/
+coverage/
+playwright-report/
+test-results/
+src/generated/
+
+# Hand-formatted documents: the PRD is kept verbatim and the design docs are
+# formatted by hand, so Prettier must not rewrite them.
+docs/
+
+# Maintained by `next dev` (Next.js agent rules)
+AGENTS.md
+CLAUDE.md
