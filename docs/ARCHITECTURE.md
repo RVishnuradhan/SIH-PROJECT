@@ -2,7 +2,7 @@
 
 **Product:** Centering Materials Rental & Inventory Management System
 **Source of truth:** [PRD.md](PRD.md) (v1.0) · **Database design:** [DATABASE.md](DATABASE.md)
-**Status:** decisions A1–A21 approved 23 Sep 2026 · database design awaiting review · next: Phase 1
+**Status:** decisions A1–A21 and the database design approved 23 Sep 2026 · Phase 1 (project initialization) done · next: Phase 2
 
 ---
 
@@ -74,10 +74,10 @@ Around the bill sit:
 |---|---|---|
 | **A1** | Rental days = calendar-date difference between the taking date and the return date, **minimum 1**, on the **Asia/Kolkata** calendar. Times are stored and shown but don't change the count. The rule is stored on each bill. | `domain/rental-days.ts`; `bills.day_count_rule`, `bills.time_zone` |
 | **A2** | Batch-based returns: each returned batch has its own quantity, date/time, chargeable days, rate and amount (e.g. 15 × rate × 3 + 5 × rate × 5). The advance belongs to the whole bill. No automatic partial refunds; settlement happens when the rental is fully returned. Staff may record an additional payment or refund manually at any time, and it is audited. | `returns`, `return_items`; `domain/settlement.ts` |
-| **A3** | At return, each line can be **Returned, Damaged or Lost**. Damaged and lost pieces need a quantity and a note, stay out of available stock ("held"), and are resolved later by an admin (release or write-off). No automatic damage charges; `bill_charges` makes them possible later. | `return_items.condition`; `inventory.held_quantity`; `HOLD_*` movements |
+| **A3** | At return, each line can be **Returned, Damaged or Lost**. Damaged and lost pieces need a quantity and a note, stay out of available stock ("held"), and are resolved later by an admin (release or write-off). In V1 they are charged the normal rental amount up to their return date, with **no extra damage/loss penalty**; `bill_charges` keeps V2 damage/loss charges possible without a schema redesign. | `return_items.condition`; `inventory.held_quantity`; `HOLD_*` movements |
 | **A4** | Saving step 1 creates the draft and **permanently assigns the bill number**, shown throughout the rest of the wizard. Abandoned drafts stay DRAFT and can be resumed. Staff can cancel them. Numbers are never reused. Format `SMS-000001`. | `counters`; `bills.bill_seq`, `bill_number` |
 | **A5** | Not GST-registered: no GST calculations or GSTIN. The bill title is **"Rental Bill"**. The schema can take tax fields later. | `business_profiles.bill_title` |
-| **A6** | After generation, lines, quantities and rates are locked. Notes, site location and expected duration are editable, with audit. An admin can void a generated bill: reason required, stock reversed, refund recorded in the ledger where applicable, number kept, never deleted. Materials taken later go on a **new** bill. | DB triggers `bills_guard`, `bill_items_guard`; void operation |
+| **A6** | After generation, lines, quantities and rates are locked. Notes, site location and expected duration are editable **by ADMIN only**, with every edit audit-logged; STAFF can't edit generated bills. An admin can void a generated bill: reason required, stock reversed, refund recorded in the ledger where applicable, number kept, never deleted. Materials taken later go on a **new** bill. | DB triggers `bills_guard`, `bill_items_guard`; void operation |
 | **A7** | "Payment Finished" means the advance was actually received (COMPLETED). "Payment Not Yet" means PENDING, never counted as received. A ₹0 advance is allowed. | `payments.status` |
 | **A8** | Two separate statuses. Rental: DRAFT, ACTIVE, PARTIALLY_RETURNED, RETURNED, CANCELLED. Settlement: NO_DUE, PAYMENT_PENDING, ADDITIONAL_DUE, REFUND_DUE, SETTLED. A bill can be RETURNED with its settlement still open. | `bills.status`, `bills.settlement_status` |
 | **A9** | The catalog rate is always used, with no rate editing during billing; admins set rates in Settings. Discounts and waivers are supported in the data model, not a prominent V1 workflow: admin only, reason required, stored as a separate ledger record. | `payments.type = DISCOUNT` |
@@ -229,10 +229,10 @@ In code, each capability is a permission key (`bill.create`, `bill.void`, `retur
 
 | Concern | Choice |
 |---|---|
-| App | Next.js 16 (App Router), React 19, TypeScript (strict), pnpm, current Node LTS |
+| App | Next.js 16.3 (App Router, Turbopack), React 19.2, TypeScript 5.9 (strict; TypeScript 7 isn't supported by typescript-eslint yet), pnpm 12, Node.js 24 LTS |
 | UI | Tailwind CSS, shadcn/ui (accessible Radix components), Lucide icons, TanStack Table, sonner toasts, Motion (formerly Framer Motion) with reduced-motion respected |
 | Forms | React Hook Form + Zod, with the same schemas validated again on the server |
-| Database | PostgreSQL 16+ (managed; tested on 18), Prisma 7.10 with the `pg` driver adapter, `pg_trgm` for search. Prisma 8 is still a release candidate, so it isn't used. |
+| Database | PostgreSQL 16+ (managed; tested on 18; PostgreSQL 17 in Docker for local development), Prisma 7.10 with the `pg` driver adapter, `pg_trgm` for search. Prisma 8 is still a release candidate, so it isn't used. |
 | Auth | Better Auth 1.x: username + password, sessions stored in the database, httpOnly secure cookies, login rate limiting, admin plugin for roles and deactivation |
 | PDF | `@react-pdf/renderer` 4.x on the server, fed by the same bill view-model as the on-screen bill. A4. Embedded Noto Sans + Noto Sans Tamil, so ₹ and Tamil print correctly. |
 | Files | Private S3-compatible bucket (Supabase Storage, Cloudflare R2 or AWS S3, Mumbai region preferred). Local folder in development. |
@@ -251,7 +251,7 @@ In code, each capability is a permission key (`bill.create`, `bill.void`, `retur
   - Double-clicks and resubmits are harmless: generation is a state change of the existing draft, and returns and payments carry idempotency keys.
 - **Time.** Timestamps are stored in UTC. All day counting, "today", overdue checks and date search use Asia/Kolkata. Dates are shown as DD-MM-YYYY.
 - **Money.** `numeric(12,2)` in the database and decimal arithmetic in code, never floating point. Shown as ₹ with Indian digit grouping.
-- **Fresh data.** Business pages are always rendered with fresh data, because stale stock numbers are worse than a few milliseconds. Pages refresh after every change.
+- **Fresh data.** Business pages are always rendered with fresh data, because stale stock numbers are worse than a few milliseconds. Pages refresh after every change. Next.js 16's opt-in *Cache Components* model is evaluated in Phase 3, when authenticated data loading starts. Until then the default model is used, where route handlers and pages that read request data are dynamic.
 - **Performance.**
   - Lists are paginated and searches are indexed.
   - Dashboard stats come from a few summary queries.
@@ -353,6 +353,9 @@ SIH-PROJECT/
 │       ├── business-profile.ts       # version 1, from the PRD
 │       └── catalog.ts                # 13 materials / 28 variants, rates & stock TODO
 ├── prisma.config.ts
+├── AGENTS.md · CLAUDE.md            # guidance for coding agents (Next.js block kept by `next dev`)
+├── components.json                   # shadcn/ui configuration
+├── vitest.config.mts · playwright.config.ts
 ├── scripts/
 │   └── create-admin.ts               # first admin account (Phase 3)
 ├── public/                           # static assets (logo when provided)
@@ -473,12 +476,12 @@ A staging deployment after Phase 5 is optional but recommended, so you can try e
 Any of these can be changed without affecting the database design.
 
 1. **Cancelling drafts:** both roles can cancel drafts (A4's "authorized staff").
-2. **Editing generated bills:** editing site location, notes and expected duration after generation is **admin-only**, because A12 lists "edit bills" only under ADMIN.
+2. **Editing generated bills:** editing site location, notes and expected duration after generation is **admin-only**, with an audit entry for every edit. *(Confirmed in the second review; now part of A6.)*
 3. **Voiding a bill that has returns:** void its returns first, newest first; then void the bill.
 4. **Correcting mistakes:**
    - A wrong return: an admin voids the latest return, with a reason.
    - A wrong payment: an admin cancels it, with a reason, and records a new one.
-5. **Rent on damaged/lost pieces:** charged like any batch, up to the return date. There are no extra damage or loss charges in V1.
+5. **Rent on damaged/lost pieces:** charged the normal rental amount like any batch, up to the return date. There are no extra damage or loss charges in V1. *(Confirmed in the second review; now part of A3.)*
 6. **Resolving held stock:** an admin resolves damaged/lost pieces per variant (release or write-off), with a reason, linked to the return line where possible.
 7. **Phone numbers:** Indian mobile numbers only (10 digits, starting 6–9). Landlines are not accepted.
 8. **Back-dating:** the warning shows for taking dates more than **7 days** old.
@@ -514,3 +517,5 @@ Any of these can be changed without affecting the database design.
 | Date | Change |
 |---|---|
 | 23 Sep 2026 | Analysis of PRD v1.0; decisions A1–A21 approved; implementation principles P1–P6 added; database design proposed and verified (DATABASE.md). |
+| 23 Sep 2026 | Second review: database design approved; generated-bill edits confirmed ADMIN-only with audit (A6); damaged/lost pieces confirmed at normal rent with no V1 penalty (A3). |
+| 23 Sep 2026 | Phase 1 done: Next.js 16.3 + TypeScript strict + Tailwind 4 + shadcn/ui foundation, design tokens, typed env, health check, security headers, Docker PostgreSQL, Vitest + Playwright tests, GitHub Actions CI. |
