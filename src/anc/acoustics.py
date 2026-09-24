@@ -81,7 +81,10 @@ def make_scene(
                                     np.exp(2j * np.pi * rng.random(n // 2 + 1)), n=n)
             arr += shuffled * _rms(arr) / _rms(shuffled) * 10 ** (incoherent_db / 20)
 
-    scale = _rms(s_pri) / (_rms(n_pri) * 10 ** (snr_db / 20))
+    if _rms(s_pri) > 1e-9:
+        scale = _rms(s_pri) / (_rms(n_pri) * 10 ** (snr_db / 20))
+    else:
+        scale = 1.0 / _rms(n_pri)      # no speech: noise at unit level, snr_db unused
     n_pri, n_ref = n_pri * scale, n_ref * scale
 
     s_ref = np.zeros(n)
@@ -89,7 +92,7 @@ def make_scene(
         s_ref = fftconvolve(speech, room_ir(rng, delay=4, length=32, rt_ms=1.0))[:n]
         s_ref *= _rms(s_pri) * 10 ** (speech_leak_db / 20) / _rms(s_ref)
 
-    floor = _rms(s_pri) * 10 ** (sensor_noise_db / 20)
+    floor = max(_rms(s_pri), _rms(n_pri)) * 10 ** (sensor_noise_db / 20)
     n_pri = n_pri + floor * rng.standard_normal(n)
     n_ref = n_ref + floor * rng.standard_normal(n)
     return Scene((s_pri + n_pri).astype(np.float32), (n_ref + s_ref).astype(np.float32),

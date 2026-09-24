@@ -179,13 +179,22 @@ def impulse_burst(
     """Gunfire / blast: sparse sharp transients with exponential decay tails.
 
     Each event is a near-instantaneous attack followed by a fast decay and a
-    slower reverberant tail. This is the case ordinary NLMS handles worst --
-    the filter chases the transient and takes tens of ms to recover -- which is
-    exactly why detecting it separately is worth the model.
+    slower reverberant tail. See `impulse_burst_events` for the event times.
     """
+    return impulse_burst_events(n, rng, rate_hz)[0]
+
+
+def impulse_burst_events(
+    n: int,
+    rng: np.random.Generator,
+    rate_hz: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Like `impulse_burst`, but also returns the onset sample of every event,
+    which the dataset needs to label windows as impulsive or not."""
     if rate_hz is None:
         rate_hz = float(rng.uniform(1.5, 8.0))
     out = np.zeros(n, dtype=np.float64)
+    onsets = []
     n_events = max(1, int(rng.poisson(rate_hz * n / SAMPLE_RATE)))
     for _ in range(n_events):
         start = int(rng.integers(0, max(n - 1, 1)))
@@ -200,9 +209,11 @@ def impulse_burst(
         # Blast energy is broadband but tilted low; the tail is darker still.
         exc = colored_noise(length, exponent=float(rng.uniform(0.3, 1.0)), rng=rng)
         out[start: start + length] += float(rng.uniform(0.6, 1.0)) * env * exc
+        onsets.append(start)
     if _rms(out) < 1e-9:      # Poisson gave us nothing placeable
         out[n // 2] = 1.0
-    return _normalize(out)
+        onsets.append(n // 2)
+    return _normalize(out), np.array(sorted(onsets), dtype=np.int64)
 
 
 # --- Speech-like ---------------------------------------------------------
