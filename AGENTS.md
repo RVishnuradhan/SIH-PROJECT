@@ -26,6 +26,11 @@ Database: the schema is `prisma/schema.prisma`; the rules Prisma can't express
 applied migration: change the schema and add a new one. Money is whole paise in
 `src/domain/money.ts`; never use floating-point rupees.
 
+Authorization: pages call `requireUser()` / `requirePermission()` (src/modules/auth/session.ts);
+every server action goes through `defineAction()` (src/lib/action.ts) with a permission key from
+src/lib/permissions.ts; route handlers check the session themselves. Never rely on the proxy or
+on hiding UI. Never log form input or write secrets to the audit log.
+
 Commands: `pnpm dev` · `pnpm check` (lint, format, types, unit tests) · `pnpm test:integration`
 (needs PostgreSQL via `DATABASE_URL`) · `pnpm build` · `pnpm test:e2e` · `pnpm db:deploy` ·
-`pnpm db:seed`
+`pnpm db:seed` · `pnpm admin:create`

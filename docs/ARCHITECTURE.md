@@ -2,7 +2,7 @@
 
 **Product:** Centering Materials Rental & Inventory Management System
 **Source of truth:** [PRD.md](PRD.md) (v1.0) · **Database design:** [DATABASE.md](DATABASE.md)
-**Status:** decisions A1–A21 and the database design approved 23 Sep 2026 · Phase 1 (project initialization) and Phase 2 (database) done · next: Phase 3, after approval
+**Status:** decisions A1–A21 and the database design approved 23 Sep 2026 · Phases 1 (project initialization), 2 (database) and 3 (login & permissions) done · next: Phase 4, after approval
 
 ---
 
@@ -201,7 +201,7 @@ The rules are numbered so later phases can refer to them. Each is enforced on th
 
 ¹ Staff see that an ID document is on file (a blurred placeholder), but can't open it.
 
-In code, each capability is a permission key (`bill.create`, `bill.void`, `return.void`, `payment.discount`, `document.viewSensitive`, `inventory.adjust`, `catalog.manage`, `user.manage`, `audit.view`, …) in one role → permission map. Every server action and data query checks it. Adding roles later means adding map entries, not changing code paths.
+In code, each capability is a permission key (`bill.create`, `bill.void`, `return.void`, `payment.discount`, `document.viewSensitive`, `inventory.adjust`, `catalog.manage`, `user.manage`, `audit.view`, …) in one role → permission map (`src/lib/permissions.ts`, 28 keys, one per row above). Every server action and data query checks it. Adding roles later means adding map entries, not changing code paths. Tests try every key with both roles: admins allowed, staff allowed only where the table says so, everyone else refused.
 
 ## 7. Technical architecture
 
@@ -233,7 +233,7 @@ In code, each capability is a permission key (`bill.create`, `bill.void`, `retur
 | UI | Tailwind CSS, shadcn/ui (accessible Radix components), Lucide icons, TanStack Table, sonner toasts, Motion (formerly Framer Motion) with reduced-motion respected |
 | Forms | React Hook Form + Zod, with the same schemas validated again on the server |
 | Database | PostgreSQL 16+ (managed; tested on 18; PostgreSQL 17 in Docker for local development), Prisma 7.10 with the `pg` driver adapter, `pg_trgm` for search. Prisma 8 is still a release candidate, so it isn't used. |
-| Auth | Better Auth 1.x: username + password, sessions stored in the database, httpOnly secure cookies, login rate limiting, admin plugin for roles and deactivation |
+| Auth | Better Auth 1.7 (pinned), used as a library: username + password, sessions stored in the database, httpOnly secure cookies, admin plugin for roles and deactivation. None of its HTTP endpoints are mounted; sign-in, sign-out and user management are this app's own server actions, which add throttling, permission checks and the audit log. |
 | PDF | `@react-pdf/renderer` 4.x on the server, fed by the same bill view-model as the on-screen bill. A4. Embedded Noto Sans + Noto Sans Tamil, so ₹ and Tamil print correctly. |
 | Files | Private S3-compatible bucket (Supabase Storage, Cloudflare R2 or AWS S3, Mumbai region preferred). Local folder in development. |
 | Testing | Vitest (domain rules, services), integration tests against real PostgreSQL (including concurrency), Playwright end-to-end |
@@ -251,7 +251,7 @@ In code, each capability is a permission key (`bill.create`, `bill.void`, `retur
   - Double-clicks and resubmits are harmless: generation is a state change of the existing draft, and returns and payments carry idempotency keys.
 - **Time.** Timestamps are stored in UTC. All day counting, "today", overdue checks and date search use Asia/Kolkata. Dates are shown as DD-MM-YYYY.
 - **Money.** `numeric(12,2)` in the database and decimal arithmetic in code, never floating point. Shown as ₹ with Indian digit grouping.
-- **Fresh data.** Business pages are always rendered with fresh data, because stale stock numbers are worse than a few milliseconds. Pages refresh after every change. Next.js 16's opt-in *Cache Components* model is evaluated in Phase 3, when authenticated data loading starts. Until then the default model is used, where route handlers and pages that read request data are dynamic.
+- **Fresh data.** Business pages are always rendered with fresh data, because stale stock numbers are worse than a few milliseconds. Pages refresh after every change. Next.js 16's opt-in *Cache Components* model was evaluated in Phase 3 and is **not enabled**: every signed-in page shows per-user, must-be-fresh data, so the default model — pages that read the session are rendered on each request — is the simpler fit. It can be revisited if a page ever benefits from caching.
 - **Performance.**
   - Lists are paginated and searches are indexed.
   - Dashboard stats come from a few summary queries.
@@ -335,6 +335,16 @@ expectedReturnDate = dateIST(takenAt) + expectedDays
 - **Audit:** the append-only `audit_logs`, written in the same transaction as each change. Before/after values are recorded for edits, with no document contents or ID numbers.
 - **Platform:** HTTPS only, and security headers including a Content-Security-Policy. Secrets are held in environment variables and never committed. Production uses a separate least-privilege database role. Automated backups, with a restore drill before go-live.
 - **Errors:** users see clear messages, never stack traces. Unexpected errors show a reference ID that matches the server log.
+- **How Phase 3 implements this:**
+  - Signing in: a server action (`src/modules/auth/actions.ts`) calls Better Auth. Attempts for the same account or network address run one at a time. The failure limits (§13) are checked before the password, and every outcome is audited: signed in, failed, blocked, refused (deactivated), signed out. A wrong username and a wrong password get the same message.
+  - Guards:
+    - Pages call `requireUser()` or `requirePermission()`; a role without access gets the 403 page.
+    - Server actions go through `defineAction()`: session → permission → Zod → service, with refusals audited as `access.denied`.
+    - Route handlers answer 401/403 as JSON.
+    - `src/proxy.ts` only redirects signed-out visitors (keeping where they were going) and keeps active sessions alive; it is not the security boundary.
+  - Documents: `/api/documents/[id]` is the only way to a document file. The file is read from private storage outside `public/`, sent with `Cache-Control: private, no-store` and a sandboxing Content-Security-Policy, and every view of a sensitive document is audited.
+  - Secrets: the auth secret comes only from the environment (at least 32 characters, checked at start-up); `https://` is required in production. Error messages name variables, never values. The audit writer refuses any field that looks like a secret. Server logs never include form input.
+  - Deployment requirement: the app runs behind a proxy or platform that sets `X-Forwarded-For` (Vercel, nginx, …), so the per-address sign-in limit sees real client addresses. The per-account lock doesn't depend on it.
 
 ## 11. Folder structure
 
@@ -358,15 +368,17 @@ SIH-PROJECT/
 ├── components.json                   # shadcn/ui configuration
 ├── vitest.config.mts · playwright.config.ts
 ├── scripts/
-│   └── create-admin.ts               # first admin account (Phase 3)
+│   └── create-admin.ts               # `pnpm admin:create`: first admin; --additional for recovery
 ├── public/                           # static assets (logo when provided)
 ├── src/
 │   ├── app/
 │   │   ├── (public)/
 │   │   │   ├── page.tsx              # splash, once per session
-│   │   │   └── login/page.tsx
+│   │   │   └── login/                # sign-in form → throttled server action
+│   │   ├── forbidden.tsx             # 403 page (forbidden() for pages a role can't use)
 │   │   ├── (app)/                    # signed-in shell: sidebar, top bar, global search
-│   │   │   ├── layout.tsx
+│   │   │   ├── layout.tsx            # requires a session (each page checks its permission too)
+│   │   │   ├── account/              # your account: change password
 │   │   │   ├── dashboard/
 │   │   │   ├── bills/
 │   │   │   │   ├── new/              # step 1 → creates the draft and its number
@@ -384,14 +396,14 @@ SIH-PROJECT/
 │   │   │   └── settings/
 │   │   │       ├── business/         # bill header (versioned)
 │   │   │       ├── catalog/          # materials, variants, rates, thresholds
-│   │   │       ├── users/
+│   │   │       ├── users/            # admin: create, role, deactivate/reactivate, reset password
 │   │   │       └── audit-log/
 │   │   └── api/
-│   │       ├── auth/[...all]/route.ts            # Better Auth
 │   │       ├── bills/[billNumber]/pdf/route.ts
 │   │       ├── documents/[documentId]/route.ts   # permission-checked, every view logged
 │   │       ├── search/route.ts
 │   │       └── health/route.ts
+│   ├── proxy.ts                      # early sign-in redirect; keeps active sessions alive (not the security boundary)
 │   ├── modules/                      # one folder per business area:
 │   │   ├── billing/                  #   service · schemas · queries · actions · components
 │   │   │   └── bill-number.ts        #   atomic bill-number allocation (A4)
@@ -400,12 +412,13 @@ SIH-PROJECT/
 │   │   ├── inventory/
 │   │   ├── catalog/
 │   │   ├── customers/
-│   │   ├── documents/
+│   │   ├── documents/                #   who may open a document; the permission-checked file route
 │   │   ├── business-profile/
-│   │   ├── users/
+│   │   ├── auth/                     #   sign-in/out, session (requireUser, requirePermission), throttling, passwords
+│   │   ├── users/                    #   user management service, schemas, server actions
 │   │   ├── dashboard/
 │   │   ├── search/
-│   │   └── audit/
+│   │   └── audit/                    #   append-only audit writer (never records secrets)
 │   ├── domain/                       # pure rules, no I/O, exhaustively unit-tested
 │   │   ├── money.ts                  # whole paise, never floating-point rupees
 │   │   ├── rental-days.ts            # A1: IST calendar days, minimum 1
@@ -424,10 +437,12 @@ SIH-PROJECT/
 │   │   └── shared/                   # status badges, money, data table, quantity stepper, states
 │   ├── lib/
 │   │   ├── db.ts                     # Prisma client (pg adapter)
-│   │   ├── auth.ts                   # Better Auth configuration
-│   │   ├── permissions.ts            # role → permission map (A12)
+│   │   ├── auth.ts                   # Better Auth configuration (library only, no HTTP endpoints)
+│   │   ├── permissions.ts            # role → permission map (A12, §6)
 │   │   ├── action.ts                 # guard used by every server action
-│   │   ├── storage.ts                # private S3-compatible storage
+│   │   ├── routes.ts                 # protected paths, safe redirect after sign-in
+│   │   ├── request-info.ts           # client IP and browser for the audit log
+│   │   ├── storage.ts                # private document storage (local folder; S3-compatible in Phase 7)
 │   │   ├── format.ts                 # ₹ and DD-MM-YYYY display formatting
 │   │   ├── errors.ts
 │   │   ├── env.ts
@@ -438,6 +453,7 @@ SIH-PROJECT/
 │   ├── integration/                  # real PostgreSQL: DB guards, services, concurrency
 │   │   └── support/                  #   per-file throw-away databases, SQL fixtures
 │   └── e2e/                          # Playwright
+│       └── support/                  #   throw-away sms_e2e database, test accounts
 ├── docker-compose.yml                # PostgreSQL for local development
 ├── .env.example
 └── .github/workflows/ci.yml
@@ -501,6 +517,28 @@ Any of these can be changed without affecting the database design.
 15. **Display formats:** dates as DD-MM-YYYY; amounts as ₹ with Indian grouping, and paise shown only when present.
 16. **Archive reasons:** optional. Void and cancellation reasons are required.
 17. **Tooling:** Prisma 7.10 (stable), not the Prisma 8 release candidate; pnpm; current Node LTS.
+18. **Sign-in protection:**
+    - 5 failed attempts on one account within 15 minutes lock it for the rest of that window. Even the right password is refused, with a "please wait" message.
+    - 20 failed attempts from one network address within 15 minutes block that address.
+    - Attempts on unknown usernames are counted the same way, under a keyed hash (the typed name is never stored), so locking reveals nothing.
+    - A successful sign-in, or an admin resetting the password, starts the count again.
+    - Counts come from the audit log, so they survive restarts and hold across app instances.
+19. **Passwords:** 10–128 characters, no forced symbol mixes (passphrases encouraged), hashed with salted scrypt.
+    - Admins set the first password.
+    - Anyone can change their own: the current password is required, 5 wrong guesses in 15 minutes pause it, and every other session they have ends.
+    - An admin reset ends all of that user's sessions.
+20. **Usernames:** 3–30 letters, numbers, dots or underscores; stored in lower case (sign-in ignores case); can't be changed after creation. Email is optional; when empty, a hidden `<username>@no-email.invalid` placeholder is stored for Better Auth.
+21. **User safety rules:**
+    - Admins can't change their own role, deactivate themselves or reset their own password through user management.
+    - At least one active admin always remains, even when two admins act at the same moment.
+    - Deactivating ends every session of that user immediately; users are never deleted.
+22. **Sessions:**
+    - Every request checks the database (no cookie cache), so deactivation and sign-out take effect at once.
+    - The expiry moves 7 days forward at most once a day of use.
+    - Forged or ended session cookies are cleared.
+    - There is no "remember me" choice: every session follows the 7-day idle rule.
+23. **First admin:** `pnpm admin:create` asks for the details, with the password typed hidden and never printed. It refuses when an active admin already exists; `--additional` creates another admin (recovery if nobody can sign in).
+24. **403 pages** use Next.js `forbidden()`, which needs the experimental `authInterrupts` flag in Next.js 16. Server actions and route handlers don't depend on it.
 
 ## 14. Open items
 
@@ -514,7 +552,7 @@ Any of these can be changed without affecting the database design.
 **Inputs to be provided later:**
 - The real **daily rates, total stock and low-stock thresholds** for the 28 variants (A15). They're needed for realistic testing by Phase 9 at the latest, and are required before go-live. Placeholders are used until then.
 - The **logo** file (A18), whenever it's ready.
-- The first **admin's name, username and email** (Phase 3). The password is set by you when the account is created, never committed.
+- The first **admin's name, username and email.** Phase 3 delivered `pnpm admin:create`: you run it yourself against the production database, and the password you type is never stored in the repository or printed.
 
 ## 15. Change log
 
@@ -524,3 +562,4 @@ Any of these can be changed without affecting the database design.
 | 23 Sep 2026 | Second review: database design approved; generated-bill edits confirmed ADMIN-only with audit (A6); damaged/lost pieces confirmed at normal rent with no V1 penalty (A3). |
 | 23 Sep 2026 | Phase 1 done: Next.js 16.3 + TypeScript strict + Tailwind 4 + shadcn/ui foundation, design tokens, typed env, health check, security headers, Docker PostgreSQL, Vitest + Playwright tests, GitHub Actions CI. |
 | 23 Sep 2026 | Phase 2 done: Prisma 7 schema and init migration (19 tables, 10 enums, 58 CHECKs, 11 triggers, 4 views); pg-adapter client; atomic bill numbers; seed with the exact PRD catalog and no invented values; `src/domain/` rules; the 103 scenarios plus migration, seed, bill-number, concurrency, settlement and snapshot integration tests on real PostgreSQL in CI. `docs/database/constraints.sql` merged into the migration. |
+| 24 Sep 2026 | Phase 3 done: Better Auth 1.7.5 as a library (username + password, database sessions, admin plugin); throttled, audited sign-in server action; 7-day idle sessions kept alive by the proxy; role → permission map (28 keys, §6) enforced in pages, server actions and route handlers; 403 page; admin user management (create, role, deactivate/reactivate, reset password) with last-admin and self-protection rules; change own password; permission-checked private document route; `pnpm admin:create`; audit writer. Cache Components evaluated and not enabled (§7). Defaults 18–24 added (§13). |

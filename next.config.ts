@@ -20,6 +20,11 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   typedRoutes: true,
+  experimental: {
+    // forbidden() renders src/app/forbidden.tsx with HTTP 403 when a signed-in
+    // user opens a page their role can't use (still experimental in Next.js 16).
+    authInterrupts: true,
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

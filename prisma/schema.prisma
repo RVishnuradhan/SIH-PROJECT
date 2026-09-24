@@ -137,9 +137,10 @@ enum InventoryTransactionType {
 }
 
 // ─── Users and authentication (Better Auth) ─────────────────────────────────
-// Fields required by Better Auth with its username and admin plugins. Phase 3
-// reconciles this block with Better Auth's CLI output; the role values and the
-// "who did what" back-relations are ours. Users are deactivated, never deleted.
+// Fields required by Better Auth with its username and admin plugins, verified
+// in Phase 3 against Better Auth 1.7.5 by the integration tests (sign-in,
+// sessions, deactivation). The role values and the "who did what"
+// back-relations are ours. Users are deactivated, never deleted.
 
 model User {
   id              String    @id

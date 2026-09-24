@@ -2,12 +2,14 @@ import {
   CheckCircle2,
   CircleDot,
   Clock,
+  LogIn,
   PackageCheck,
   TriangleAlert,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
 import type { Metadata } from "next";
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { Logo } from "@/components/brand/logo";
@@ -91,9 +93,18 @@ export default function FoundationPage() {
 
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-6 sm:px-6">
         <Logo />
-        <Badge variant="outline" className="hidden bg-card sm:inline-flex">
-          Phase 1 · UI foundation
-        </Badge>
+        <div className="flex items-center gap-3">
+          <Badge variant="outline" className="hidden bg-card sm:inline-flex">
+            Phase 1 · UI foundation
+          </Badge>
+          <Button asChild size="sm">
+            {/* The sign-in page is dynamic: nothing useful to prefetch. */}
+            <Link href="/login" prefetch={false}>
+              <LogIn aria-hidden="true" />
+              Sign in
+            </Link>
+          </Button>
+        </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-4 pb-16 sm:px-6">

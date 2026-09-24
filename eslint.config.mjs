@@ -19,7 +19,7 @@ const eslintConfig = defineConfig([
   },
   {
     // Command-line scripts (seed, maintenance) report progress on the console.
-    files: ["prisma/**", "scripts/**"],
+    files: ["prisma/**", "scripts/**", "tests/e2e/support/**"],
     rules: { "no-console": "off" },
   },
   // Turn off stylistic rules that Prettier owns. Must stay last.

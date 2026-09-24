@@ -47,3 +47,9 @@ next-env.d.ts
 
 # generated Prisma client (Phase 2)
 /src/generated/
+
+# Private customer documents (development storage; never committed)
+/storage/
+
+# End-to-end test run data (removed after each run)
+/.e2e/

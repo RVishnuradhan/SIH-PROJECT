@@ -216,7 +216,7 @@ Arrows point from the "one" side to the "many" side.
 | **RentalReturnItem** (`return_items`) | How many pieces of one bill line came back in one batch, and in what condition (GOOD, DAMAGED or LOST), with that batch's chargeable days, rate and amount. | N → 1 return and 1 bill line. |
 | **Payment** (`payments`) | The **money ledger**: ADVANCE, ADDITIONAL, REFUND or DISCOUNT; PENDING, COMPLETED or CANCELLED; amount; Cash or UPI; UPI reference. | N → 1 bill. Optionally → the return where it was settled. |
 | **BillCharge** (`bill_charges`) | Non-rental charges (damage, loss, other). **In the model for the future; not used in V1.** | N → 1 bill. Optionally → the damaged or lost return line. |
-| **AuditLog** (`audit_logs`) | Append-only record of important actions. It also feeds Recent Activity. | N → 1 actor. Points at any entity by type and id. |
+| **AuditLog** (`audit_logs`) | Append-only record of important actions. It also feeds Recent Activity. Since Phase 3 it records sign-ins (succeeded, failed, blocked, refused), sign-outs, user management (`user.*`), refused actions (`access.denied`) and views of sensitive documents (`document.viewed`) — never passwords, hashes or tokens. Failed sign-ins are also what the sign-in limits count. | N → 1 actor. Points at any entity by type and id. |
 
 Naming: the return tables are `RentalReturn` and `RentalReturnItem` in code, because `return` is a reserved word in TypeScript. In the database they are `returns` and `return_items`, as in the PRD.
 
