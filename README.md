@@ -31,35 +31,38 @@ Noise types are **multi-label**: "mixed" noise means several are on at once.
 
 ### Simulation results
 
-From `anc.nlms` + `anc.acoustics`: synthetic speech in 1-2 s phrases with
-0.5-1 s pauses, engine / revving / pass-by / wind noise, 12 scenes. Output
-SNR in dB, input around 0.5 dB.
+All numbers below use **synthetic** speech and noise. They show which design
+choices matter; real performance has to be measured on real recordings.
 
-| Policy | Mean | Worst case |
+#### Closed loop: trained classifier driving the canceller
+
+`tools/eval_loop.py`: the model runs every 50 ms on the last 265 ms of both
+mics, and its speech decisions drive the canceller (freeze, 150 ms rollback,
+divergence guard). 30 fresh scenes (5 noise types x 6) that nothing was tuned
+on; speech in phrases with pauses; input SNR 0 dB.
+
+| Detector | Mean output SNR | Worst scene |
 |---|---|---|
-| Always adapting, fast (mu 0.1) | 2.1 | 0.6 |
-| Always adapting, slow (mu 0.003) | 7.6 | -0.9 |
-| Perfect speech detector, freeze during speech | 15.5 | 6.5 |
-| Realistic detector (~50 ms late), freeze | 9.4 | -3.3 |
-| **Realistic detector + weight rollback** | **13.9** | **1.1** |
-| Realistic detector updated every 50 ms + rollback (chosen) | 12.6 | 7.3 |
+| None (always adapting) | 2.1 dB | 0.5 dB |
+| Classifier, primary mic only | 9.4 dB | -1.1 dB |
+| **Classifier, both mics** | **11.8 dB** | **0.8 dB** |
+| Perfect speech detector | 15.5 dB | 2.6 dB |
 
-What this means for the design:
+- The two-mic classifier gets about **75% of the perfect detector's gain**.
+- It flags speech a median **37 ms** after a phrase starts (90th percentile
+  99 ms), inside the 150 ms rollback window. One mic: 65 ms / 133 ms.
+- Both mics beat one mic on every output (validation AUC, speech 0.977 vs
+  0.962), because speech is much louder at the mouth mic than at the reference.
 
-- **Adapting while the soldier talks makes the filter chase the voice.**
-  Knowing when speech is present is worth ~10 dB. That is the classifier's main job.
-- **A real detector is late**, and the adaptation done in that gap stays baked
-  into the frozen filter. So the canceller keeps snapshots of its weights and,
-  when speech starts, **rolls back 150 ms**. That recovers most of the gap to
-  a perfect detector at no extra latency.
-- **The detector runs every 50 ms** (20 times a second). Every 10 ms gained
-  about 1 dB for 5x the compute; every 250 ms lost about 4 dB.
-- **Tuning the step size per noise type gained only 0-2 dB**, and freezing
-  during impulses made results worse (10.3 -> 8.6 dB). That is why noise type
-  is used for reporting, not for steering. Mic clipping on very loud bangs is
-  not modelled yet; real recordings decide that.
-- All of this uses synthetic speech. The numbers show which design choices
-  matter; real accuracy has to be measured on real recordings.
+#### Design decisions these experiments produced
+
+| Decision | Evidence |
+|---|---|
+| **Freeze adaptation while the soldier speaks** | Always adapting: 2.1 dB. A perfect speech detector: 15.5 dB. Adapting on the voice makes the filter chase it. |
+| **Roll back 150 ms on speech onset** | A real detector is late; without rollback the adaptation done in that gap stays in the frozen filter. Realistic detector: 9.4 dB without rollback, 13.9 dB with. |
+| **Classify every 50 ms** | Every 250 ms lost ~4 dB; every 10 ms gained ~1 dB for 5x the compute. |
+| **Divergence guard at 6 dB** | Without it, one missed phrase plus changing wind made the output 13 dB *worse* than the input. With it, no scene gets worse than the input, and the mean rises. A 1 dB threshold tripped on harmless speech leakage. |
+| **Noise type reported, not used for steering** | Tuning the step size per noise type gained only 0-2 dB; freezing during impulses made results worse (10.3 -> 8.6 dB). Mic clipping on loud bangs is not modelled yet. |
 
 ### Why the classifier is not in the audio path
 

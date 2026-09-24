@@ -128,3 +128,42 @@ def test_rollback_recovers_from_late_speech_detection():
     without = snr_db(sc.speech_at_primary[seg], run(False)[seg], delay=16)
     with_rb = snr_db(sc.speech_at_primary[seg], run(True)[seg], delay=16)
     assert with_rb > without + 1.0, (without, with_rb)
+
+
+def test_guard_never_lets_output_get_louder_than_input():
+    # Force a badly wrong filter, frozen, then feed it noise. Without the guard
+    # it amplifies; with it, no block may exceed the input by more than guard_db.
+    from anc.nlms import GatedCanceller
+    rng = np.random.default_rng(8)
+    p = NlmsParams(taps=64, delay=16)
+    x = rng.standard_normal(160 * 40)
+    for guard in (None, 6.0):
+        g = GatedCanceller(p, block=160, guard_db=guard)
+        g.nlms.w[:] = 3.0 * rng.standard_normal(p.taps)
+        g.set_speech(True)                       # frozen: the bad filter stays
+        worst = -np.inf
+        for k in range(0, len(x), 160):
+            out = g.process_block(x[k:k + 160], x[k:k + 160] * 0.5)
+            d = np.concatenate([np.zeros(16), x])[k:k + 160]
+            if k:
+                worst = max(worst, 10 * np.log10(np.sum(out.astype(float) ** 2) / np.sum(d ** 2)))
+        if guard is None:
+            assert worst > 15                    # confirms the setup really amplifies
+        else:
+            assert worst <= guard + 1e-6, worst
+
+
+def test_guard_recovers_instead_of_locking_up():
+    # After tripping, the filter must keep adapting and end up cancelling. The
+    # first guard design re-froze the same stale weights and never recovered.
+    from anc.nlms import GatedCanceller
+    rng = np.random.default_rng(9)
+    p = NlmsParams(taps=64, delay=16, mu=0.3)
+    g = GatedCanceller(p, block=160, guard_db=6.0)
+    g.nlms.w[:] = 3.0 * rng.standard_normal(p.taps)       # start badly wrong
+    ref = rng.standard_normal(160 * 200)
+    pri = np.convolve(ref, [0, 0, 0.8, 0.3])[: len(ref)]
+    outs = [g.process_block(pri[k:k + 160], ref[k:k + 160]) for k in range(0, len(ref), 160)]
+    tail = np.concatenate(outs[-20:]).astype(float)
+    assert g.guard_trips > 0
+    assert 10 * np.log10(np.mean(pri[-3200:] ** 2) / np.mean(tail ** 2)) > 20

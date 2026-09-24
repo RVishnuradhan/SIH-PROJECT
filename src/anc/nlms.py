@@ -82,7 +82,7 @@ class NlmsCanceller:
 
 
 class GatedCanceller:
-    """NLMS canceller driven by a speech detector, with weight rollback.
+    """NLMS canceller driven by a speech detector, with rollback and a divergence guard.
 
     This is the control logic the firmware runs around the filter:
 
@@ -93,20 +93,36 @@ class GatedCanceller:
       from `rollback_blocks` ago. A real detector notices speech tens of ms
       late, and the adaptation done in that window would otherwise stay baked
       into the frozen filter for the whole phrase.
+    - Divergence guard: a canceller must never make its output louder than
+      its input. If a block's output energy exceeds the (delayed) primary's by
+      more than `guard_db`, that block is output unprocessed (bypass), and the
+      filter restarts from the last known-good weights and keeps adapting. If
+      it trips again on the very next block, the known-good weights are wrong
+      for the current noise too, so the filter restarts from zero.
 
-    Simulation (phrase-structured speech, 12 scenes): realistic detector
-    without rollback 9.4 dB mean SNR out (worst -3.3), with rollback 13.9 dB
-    (worst 1.1); a perfect detector gives 15.5 dB.
+      (A first version froze the known-good weights instead of bypassing.
+      When those weights were wrong for new noise, the guard kept restoring
+      them and locked the canceller in a bad state: mean SNR fell from 11.2
+      to 2.7 dB. Bypass-and-readapt cannot lock up.)
+
+    Known-good weights are the ones in use at the end of a no-speech block
+    where the filter removed at least `good_db` of noise.
     """
 
     def __init__(self, params: NlmsParams | None = None, block: int = 160,
-                 rollback_blocks: int = 15) -> None:
+                 rollback_blocks: int = 15, guard_db: float | None = 6.0,
+                 good_db: float = 3.0) -> None:
         self.nlms = NlmsCanceller(params)
         self.block = block
         self.rollback_blocks = rollback_blocks
+        self.guard_db = guard_db
+        self.good_db = good_db
         self._snaps: list[np.ndarray] = []
+        self._good_w = self.nlms.w.copy()
         self._speech = False
         self.rollbacks = 0
+        self.guard_trips = 0
+        self._tripped_last = False
 
     def set_speech(self, speech: bool) -> None:
         """Apply a detector decision. Takes effect from the next block."""
@@ -115,10 +131,39 @@ class GatedCanceller:
             self.rollbacks += 1
         self._speech = speech
 
+    def _state(self) -> tuple:
+        n = self.nlms
+        return n.w.copy(), n._x.copy(), n._d.copy(), n._x_energy
+
+    def _restore(self, st: tuple) -> None:
+        n = self.nlms
+        n.w[:], n._x[:], n._d[:], n._x_energy = st[0], st[1], st[2], st[3]
+
     def process_block(self, primary: np.ndarray, reference: np.ndarray) -> np.ndarray:
         if len(primary) != self.block:
             raise ValueError(f"expected blocks of {self.block} samples, got {len(primary)}")
-        out = self.nlms.process(primary, reference, mu=0.0 if self._speech else self.nlms.p.mu)
+        before = self._state()
+        mu = 0.0 if self._speech else self.nlms.p.mu
+        out = self.nlms.process(primary, reference, mu=mu)
+
+        # The delayed primary for this block is what the output should never exceed.
+        d = np.concatenate([before[2][::-1][1:], np.asarray(primary, np.float64)])[:self.block]
+        e_in = float(np.dot(d, d)) + 1e-20
+        e_out = float(np.dot(out.astype(np.float64), out.astype(np.float64)))
+        ratio_db = 10 * np.log10(e_out / e_in + 1e-20)
+
+        if self.guard_db is not None and ratio_db > self.guard_db:
+            self.guard_trips += 1
+            out = d.astype(np.float32)                      # bypass this block
+            if self._tripped_last:
+                self._good_w[:] = 0.0                       # good weights are stale too
+            self.nlms.w[:] = self._good_w                   # restart, keep adapting
+            self._tripped_last = True
+        else:
+            self._tripped_last = False
+            if not self._speech and ratio_db < -self.good_db:
+                self._good_w = self.nlms.w.copy()
+
         self._snaps.append(self.nlms.w.copy())
         if len(self._snaps) > self.rollback_blocks:
             self._snaps.pop(0)

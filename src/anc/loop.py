@@ -19,7 +19,7 @@ import torch
 
 from . import synth
 from .acoustics import make_scene
-from .config import DEFAULT_FEATURES as CFG, ROLLBACK_MS, BLOCK_MS, SAMPLE_RATE
+from .config import DEFAULT_FEATURES as CFG, BLOCK_MS, GUARD_DB, ROLLBACK_MS, SAMPLE_RATE
 from .dataset import IDX, WINDOW_STEP_FRAMES, features_for, window_span, window_starts
 from .metrics import snr_db
 from .nlms import GatedCanceller, NlmsParams
@@ -72,10 +72,12 @@ def oracle_decisions(sc: LoopScene) -> list[tuple[int, bool]]:
 
 
 def run(sc: LoopScene, decisions: list[tuple[int, bool]] | None,
-        params: NlmsParams | None = None, rollback_ms: int = ROLLBACK_MS) -> np.ndarray:
+        params: NlmsParams | None = None, rollback_ms: int = ROLLBACK_MS,
+        guard_db: float | None = GUARD_DB) -> np.ndarray:
     """Canceller output. decisions=None means always adapting (no detector)."""
     p = params or NlmsParams()
-    g = GatedCanceller(p, block=BLOCK, rollback_blocks=max(1, rollback_ms // BLOCK_MS))
+    g = GatedCanceller(p, block=BLOCK, rollback_blocks=max(1, rollback_ms // BLOCK_MS),
+                       guard_db=guard_db)
     out, di = [], 0
     n = len(sc.primary) // BLOCK * BLOCK
     for k in range(0, n, BLOCK):

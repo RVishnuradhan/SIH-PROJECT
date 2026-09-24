@@ -44,6 +44,12 @@ ROLLBACK_MS = 150
 # The canceller processes audio in 10 ms blocks; snapshots are taken per block.
 BLOCK_MS = 10
 
+# Divergence guard: a block whose output is louder than its input by more than
+# this is bypassed and the filter restarted (see anc.nlms.GatedCanceller).
+# 6 dB (output 4x the input energy) catches real divergence; 1 dB tripped on
+# harmless speech leakage and cost ~2 dB on average in simulation.
+GUARD_DB = 6.0
+
 # --- Labels --------------------------------------------------------------
 # Noise types are MULTI-LABEL, not mutually exclusive: a revving engine over a
 # steady generator is both stationary and non-stationary, and that is exactly

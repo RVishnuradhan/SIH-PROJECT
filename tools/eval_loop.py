@@ -34,6 +34,8 @@ def main() -> None:
     ap.add_argument("--scenes", type=int, default=4, help="scenes per noise type")
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--snr", type=float, default=0.0)
+    ap.add_argument("--seed-base", type=int, default=5_000_000,
+                    help="change this to evaluate on scenes nothing was tuned on")
     a = ap.parse_args()
     torch.set_num_threads(2)
 
@@ -43,7 +45,7 @@ def main() -> None:
     lags = {m: [] for m in models}
     for ni, (noise, fn) in enumerate(NOISES.items()):
         for s in range(a.scenes):
-            sc = phrased_scene(5_000_000 + 100 * ni + s, fn, snr_db_=a.snr)
+            sc = phrased_scene(a.seed_base + 100 * ni + s, fn, snr_db_=a.snr)
             table["no detector"].setdefault(noise, []).append(score(sc, run(sc, None)))
             table["perfect detector"].setdefault(noise, []).append(score(sc, run(sc, oracle_decisions(sc))))
             for name, m in models.items():
