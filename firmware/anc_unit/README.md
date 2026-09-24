@@ -70,3 +70,27 @@ right matters more than recording lots of data.
 
 The speaker is always switched off while recording, so it cannot leak into
 the training data.
+
+## Re-recording synthetic noise
+
+Engines, vehicles and wind come from the synthetic generator, played through a
+speaker and recorded by the unit so every class goes through the same mics.
+
+```bash
+python tools/make_playback_set.py          # 21 files, ~21 min, into data/playback/
+# then, for each file:
+python tools/record.py record --port <port> --play data/playback/engine_hum_00.wav
+```
+
+Labels come from each file's `.json`, so there is nothing to type.
+`record.py --play` needs `pip install sounddevice`.
+
+**Use the biggest speaker you can find:** a Bluetooth party speaker, or PC
+speakers with a subwoofer. Laptop speakers (and the small MAX98357A speaker)
+reproduce almost nothing below ~150-200 Hz, and that is where most engine
+energy is. Re-recorded through a laptop, the engines lose their bass and
+stop sounding like engines to the model.
+
+Setup: speaker about 1-2 m from the unit, volume at a level that would
+make you raise your voice to talk over it. Keep the same setup for all
+files, and write it in `--notes` once.
