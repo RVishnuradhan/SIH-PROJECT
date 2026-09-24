@@ -26,3 +26,18 @@ def test_onset_lag_measures_first_positive_after_onset():
     onset = int(np.flatnonzero(sc.active)[0])
     lags = onset_lags_ms(sc, [(onset + 800, True)])
     assert lags[0] == 50.0
+
+
+def test_level_ratio_detector_flags_mouth_mic_speech_and_holds():
+    from anc.loop import LoopScene, level_ratio_decisions
+    n = 16000
+    rng = np.random.default_rng(0)
+    noise = rng.standard_normal(n).astype(np.float32) * 0.01
+    primary, reference = noise.copy(), noise.copy()
+    primary[8000:9600] += rng.standard_normal(1600).astype(np.float32) * 0.05   # 100 ms "speech"
+    sc = LoopScene(primary, reference, np.zeros(n, np.float32), np.zeros(n, bool), 0)
+    dec = dict(level_ratio_decisions(sc, threshold_db=1.5))
+    assert not dec[4000]                  # noise alone: equal at both mics
+    assert dec[9600]                      # speech louder at the mouth mic
+    assert dec[9600 + 2400]               # still held 150 ms later
+    assert not dec[9600 + 4000]           # released after the hold

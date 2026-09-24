@@ -108,3 +108,29 @@ def onset_lags_ms(sc: LoopScene, decisions: list[tuple[int, bool]]) -> list[floa
         if len(hit):
             lags.append(1000.0 * (times[hit[0]] - o) / SAMPLE_RATE)
     return lags
+
+
+def level_ratio_decisions(sc: LoopScene, threshold_db: float = 1.5, window_ms: int = 50,
+                          hold_ms: int = 150, period_ms: int = 50) -> list[tuple[int, bool]]:
+    """Non-AI baseline detector: speech if the mouth mic is louder than the
+    outward mic by more than `threshold_db`.
+
+    Speech is close to the primary mic and far from the reference, so it lifts
+    the primary/reference energy ratio; environmental noise reaches both mics
+    at roughly the same level. The decision is held for `hold_ms` after the
+    last positive so it does not drop out between syllables. This is what the
+    firmware uses until the trained model is on the device, and the baseline
+    the model has to beat.
+    """
+    win = window_ms * SAMPLE_RATE // 1000
+    step = period_ms * SAMPLE_RATE // 1000
+    hold = hold_ms * SAMPLE_RATE // 1000
+    p = sc.primary.astype(np.float64)
+    r = sc.reference.astype(np.float64)
+    out, last_pos = [], -10 ** 9
+    for t in range(win, len(p) + 1, step):
+        ratio = 10 * np.log10((np.sum(p[t - win:t] ** 2) + 1e-20) / (np.sum(r[t - win:t] ** 2) + 1e-20))
+        if ratio > threshold_db:
+            last_pos = t
+        out.append((t, t - last_pos <= hold))
+    return out

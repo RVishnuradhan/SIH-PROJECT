@@ -19,8 +19,8 @@ import torch  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from anc import synth  # noqa: E402
-from anc.loop import (model_decisions, onset_lags_ms, oracle_decisions, phrased_scene,  # noqa: E402
-                      run, score)
+from anc.loop import (level_ratio_decisions, model_decisions, onset_lags_ms,  # noqa: E402
+                      oracle_decisions, phrased_scene, run, score)
 from anc.training import load  # noqa: E402
 
 NOISES = {"engine steady": synth.engine_hum, "engine revving": synth.engine_rev,
@@ -40,14 +40,17 @@ def main() -> None:
     torch.set_num_threads(2)
 
     models = {p.parent.name: load(p) for p in a.models}
-    rows = ["no detector"] + list(models) + ["perfect detector"]
+    rows = ["no detector", "level ratio (no AI)"] + list(models) + ["perfect detector"]
     table = {r: {} for r in rows}
-    lags = {m: [] for m in models}
+    lags = {m: [] for m in ["level ratio (no AI)", *models]}
     for ni, (noise, fn) in enumerate(NOISES.items()):
         for s in range(a.scenes):
             sc = phrased_scene(a.seed_base + 100 * ni + s, fn, snr_db_=a.snr)
             table["no detector"].setdefault(noise, []).append(score(sc, run(sc, None)))
             table["perfect detector"].setdefault(noise, []).append(score(sc, run(sc, oracle_decisions(sc))))
+            dec = level_ratio_decisions(sc)
+            table["level ratio (no AI)"].setdefault(noise, []).append(score(sc, run(sc, dec)))
+            lags["level ratio (no AI)"] += onset_lags_ms(sc, dec)
             for name, m in models.items():
                 dec = model_decisions(m, sc, a.threshold)
                 table[name].setdefault(noise, []).append(score(sc, run(sc, dec)))
@@ -58,7 +61,7 @@ def main() -> None:
     for r in rows:
         vals = [np.mean(table[r][n]) for n in NOISES]
         allv = np.concatenate([table[r][n] for n in NOISES])
-        print(f"{r:20s}" + "".join(f"{v:16.1f}" for v in vals) + f"{allv.mean():9.1f}{allv.min():8.1f}")
+        print(f"{r:20.20s}" + "".join(f"{v:16.1f}" for v in vals) + f"{allv.mean():9.1f}{allv.min():8.1f}")
     print("\nSpeech onset detection delay (ms after the phrase starts):")
     for name, l in lags.items():
         l = np.array(l)
