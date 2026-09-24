@@ -29,10 +29,20 @@ FMAX = SAMPLE_RATE / 2
 # revving one; short enough that the decision is still current.
 CONTEXT_FRAMES = 25
 
-# How often the classifier actually runs. It is NOT in the audio path -- see
-# README "Why the classifier is not in the audio path". The ANC filter runs
-# per-sample; the classifier only retunes its parameters a few times a second.
-CLASSIFY_PERIOD_MS = 250
+# How often the classifier runs. It is NOT in the audio path -- see README.
+# 50 ms was chosen by simulation: updating every 10 ms gained only ~1 dB but
+# costs 5x the compute; every 250 ms lost ~4 dB, because the canceller keeps
+# adapting on the start of each phrase before the detector notices speech.
+CLASSIFY_PERIOD_MS = 50
+
+# When speech is detected, the canceller restores its weights from this long
+# ago, undoing adaptation that happened during the detector's reaction time.
+# Must cover the detector's onset lag (~50 ms for a 265 ms window) plus one
+# classification period, with margin.
+ROLLBACK_MS = 150
+
+# The canceller processes audio in 10 ms blocks; snapshots are taken per block.
+BLOCK_MS = 10
 
 # --- Labels --------------------------------------------------------------
 # Noise types are MULTI-LABEL, not mutually exclusive: a revving engine over a

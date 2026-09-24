@@ -80,3 +80,51 @@ def test_metric_sanity():
     assert abs(snr_db(s, s + s) - 0.0) < 1e-6                 # error == signal
     assert si_sdr_db(s, 0.1 * s) > 100                        # gain alone is not penalised
     assert abs(noise_reduction_db(s, 0.1 * s) - 20.0) < 1e-6
+
+
+def test_rollback_restores_weights_from_before_speech_onset():
+    from anc.nlms import GatedCanceller
+    rng = np.random.default_rng(6)
+    g = GatedCanceller(NlmsParams(taps=16), block=160, rollback_blocks=3)
+    x = rng.standard_normal(160 * 10)
+    for k in range(5):
+        g.process_block(x[k * 160:(k + 1) * 160], x[k * 160:(k + 1) * 160])
+    snapshot_3_ago = g._snaps[-3].copy()
+    g.set_speech(True)
+    assert np.array_equal(g.nlms.w, snapshot_3_ago) and g.rollbacks == 1
+    frozen = g.nlms.w.copy()
+    g.process_block(rng.standard_normal(160), rng.standard_normal(160))
+    assert np.array_equal(g.nlms.w, frozen)          # no adaptation during speech
+    g.set_speech(True)
+    assert g.rollbacks == 1                          # only on the onset, not every decision
+
+
+def test_rollback_recovers_from_late_speech_detection():
+    # A detector that notices speech 60 ms late, decided every 50 ms: rollback
+    # must beat the same detector without it.
+    from anc.nlms import GatedCanceller
+    rng = np.random.default_rng(7)
+    n, B = 8 * SAMPLE_RATE, 160
+    speech = np.zeros(n, np.float32)
+    t = int(1.5 * SAMPLE_RATE)
+    while t < n:
+        L = min(int(rng.uniform(1.0, 2.0) * SAMPLE_RATE), n - t)
+        speech[t:t + L] = synth.speech_like(L, rng)
+        t += L + int(rng.uniform(0.5, 1.0) * SAMPLE_RATE)
+    sc = make_scene(speech, synth.vehicle_passby(n, rng), rng, snr_db=0.0, speech_leak_db=-20.0)
+    active = np.abs(speech) > 0
+    late = np.concatenate([np.zeros(960, bool), active[:-960]])     # 60 ms late
+
+    def run(rollback):
+        g = GatedCanceller(NlmsParams(), block=B, rollback_blocks=15 if rollback else 10 ** 9)
+        out = []
+        for k in range(0, n, B):
+            if k % 800 == 0 and k > 0:                               # decisions every 50 ms,
+                g.set_speech(bool(late[max(0, k - 4240):k].mean() > 0.2))  # past 265 ms only
+            out.append(g.process_block(sc.primary[k:k + B], sc.reference[k:k + B]))
+        return np.concatenate(out)
+
+    seg = slice(int(1.5 * SAMPLE_RATE), None)
+    without = snr_db(sc.speech_at_primary[seg], run(False)[seg], delay=16)
+    with_rb = snr_db(sc.speech_at_primary[seg], run(True)[seg], delay=16)
+    assert with_rb > without + 1.0, (without, with_rb)

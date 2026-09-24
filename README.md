@@ -12,31 +12,61 @@ soldier's voice.
 Mic 1 PRIMARY   (near mouth)   -> speech + noise  -+
                                                    +-> NLMS canceller -> clean speech -> link / speaker
 Mic 2 REFERENCE (facing away)  -> noise only      -+        ^
-                                                            | tunes step size, filter length,
-                         noise classifier (4x per second) --+ freezes adaptation on impulses
+                                                            | speech starts? -> roll back 150 ms, freeze
+                          classifier (every 50 ms) ---------+
+                                    |
+                                    +-> noise type -> OLED + HQ dashboard ("IMPULSIVE / GUNFIRE")
 ```
 
 - **Two-mic NLMS adaptive noise canceller** (Widrow-style). Mic 2 hears the
   noise and the filter learns how that noise reaches Mic 1, then subtracts it.
-- **Classifier** decides what kind of noise is present and retunes the canceller:
+- **One small classifier, two outputs:**
 
-| Classifier says | Canceller does |
+| Output | Used for |
 |---|---|
-| Stationary (steady engine, fan) | small step size, long filter |
-| Non-stationary (revving, pass-by, wind) | larger step size, track changes |
-| Impulsive (gunfire, blasts) | freeze adaptation, protect the filter |
-| Speech present | never adapt on the soldier's own voice |
+| **Speech present** | Steers the canceller: adapt quickly while nobody speaks, freeze while the soldier talks |
+| **Noise type**: stationary / non-stationary / impulsive | Situational awareness, shown on the unit and to HQ. Also to be tested as clipping protection on real recordings |
 
 Noise types are **multi-label**: "mixed" noise means several are on at once.
-Speech is a separate output, because speech occurs alongside every noise type.
+
+### Simulation results
+
+From `anc.nlms` + `anc.acoustics`: synthetic speech in 1-2 s phrases with
+0.5-1 s pauses, engine / revving / pass-by / wind noise, 12 scenes. Output
+SNR in dB, input around 0.5 dB.
+
+| Policy | Mean | Worst case |
+|---|---|---|
+| Always adapting, fast (mu 0.1) | 2.1 | 0.6 |
+| Always adapting, slow (mu 0.003) | 7.6 | -0.9 |
+| Perfect speech detector, freeze during speech | 15.5 | 6.5 |
+| Realistic detector (~50 ms late), freeze | 9.4 | -3.3 |
+| **Realistic detector + weight rollback** | **13.9** | **1.1** |
+| Realistic detector updated every 50 ms + rollback (chosen) | 12.6 | 7.3 |
+
+What this means for the design:
+
+- **Adapting while the soldier talks makes the filter chase the voice.**
+  Knowing when speech is present is worth ~10 dB. That is the classifier's main job.
+- **A real detector is late**, and the adaptation done in that gap stays baked
+  into the frozen filter. So the canceller keeps snapshots of its weights and,
+  when speech starts, **rolls back 150 ms**. That recovers most of the gap to
+  a perfect detector at no extra latency.
+- **The detector runs every 50 ms** (20 times a second). Every 10 ms gained
+  about 1 dB for 5x the compute; every 250 ms lost about 4 dB.
+- **Tuning the step size per noise type gained only 0-2 dB**, and freezing
+  during impulses made results worse (10.3 -> 8.6 dB). That is why noise type
+  is used for reporting, not for steering. Mic clipping on very loud bangs is
+  not modelled yet; real recordings decide that.
+- All of this uses synthetic speech. The numbers show which design choices
+  matter; real accuracy has to be measured on real recordings.
 
 ### Why the classifier is not in the audio path
 
 The canceller runs on every sample. The classifier looks at 265 ms of audio and
-runs 4 times a second. Noise *type* changes over seconds, so the classifier
-only needs to retune the filter, not process audio. If the classifier is slow
-or wrong, the canceller keeps running on its last settings. The audio never
-drops out.
+runs every 50 ms. It never touches the audio itself; it only tells the
+canceller whether to adapt. If the classifier is slow or wrong, the canceller
+keeps running with its current filter. The audio never drops out.
 
 ## Hardware
 
