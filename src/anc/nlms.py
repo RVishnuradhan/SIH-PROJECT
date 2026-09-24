@@ -57,6 +57,9 @@ class NlmsCanceller:
         mu_arr = np.broadcast_to(np.asarray(self.p.mu if mu is None else mu, dtype=np.float64), (n,))
         out = np.empty(n, dtype=np.float64)
         w, x, dline, p = self.w, self._x, self._d, self.p
+        # Exact recompute once per call (per block), then O(1) running updates.
+        # The C port does the same, which stops float32 drift on the device.
+        self._x_energy = float(x @ x)
 
         for i in range(n):
             # Running energy of the reference window: O(1) per sample, which

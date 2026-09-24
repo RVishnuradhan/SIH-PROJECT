@@ -24,6 +24,7 @@ class FakeUnit(threading.Thread):
     def __init__(self, fd):
         super().__init__(daemon=True)
         self.fd, self.streaming, self.stop = fd, False, False
+        self.last_start = None
 
     def run(self):
         seq, t = 0, 0
@@ -39,8 +40,9 @@ class FakeUnit(threading.Thread):
                 if c == ord("I") and not self.streaming:
                     os.write(self.fd, b"ANC fw=sim fs=16000 block=160 psram=8388608 monitor=mute "
                                       b"lvl_primary=-40.0 lvl_reference=-45.0\n")
-                elif c == ord("R"):
+                elif c in (ord("R"), ord("P")):
                     self.streaming, seq = True, 0
+                    self.last_start = chr(c)
                 elif c == ord("S"):
                     self.streaming = False
             if self.streaming:
@@ -88,3 +90,22 @@ def test_record_writes_aligned_24bit_stereo_wav(tmp_path):
     assert abs(freqs[np.abs(np.fft.rfft(good[:, 1])).argmax()] - 1000) < 5
     # The lost block is zero-filled, not skipped: block 5 is silent.
     assert not x[5 * BLOCK_FRAMES:6 * BLOCK_FRAMES].any()
+
+
+def test_record_cleaned_asks_for_primary_plus_output(tmp_path):
+    master, slave = os.openpty()
+    import tty
+    tty.setraw(slave)
+    dev = FakeUnit(master)
+    dev.start()
+    try:
+        r = subprocess.run(
+            [sys.executable, str(ROOT / "tools/record.py"), "record", "--port", os.ttyname(slave),
+             "--cleaned", "--seconds", "0.5", "--out", str(tmp_path)],
+            capture_output=True, text=True, timeout=30)
+    finally:
+        dev.stop = True
+    assert r.returncode == 0, r.stderr
+    assert dev.last_start == "P"
+    meta = json.loads(next(tmp_path.glob("cleaned_*.json")).read_text())
+    assert meta["channels"] == ["primary", "cleaned"] and meta["cleaned_delay_samples"] == 16

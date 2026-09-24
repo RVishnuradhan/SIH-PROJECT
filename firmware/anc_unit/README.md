@@ -23,28 +23,59 @@ The DevKitC-1 has **two USB-C ports**:
 Flashing works through either one. Logs are kept off the native port on
 purpose, so a log line can never corrupt the binary audio stream.
 
-## v0 bring-up checklist
+## Updating to a new firmware version
 
-Firmware v0 has no noise cancellation. It exists to prove the wiring and to
-start collecting training data.
+```bash
+git pull
+idf.py set-target esp32s3      # regenerates sdkconfig; needed when sdkconfig.defaults changed
+idf.py build
+idf.py -p <UART port> flash monitor
+```
+
+The monitor should print `ANC unit firmware 0.2.0` and a `canceller:` line.
+
+## Bring-up checklist (firmware 0.2)
+
+The board runs the two-mic noise canceller. Until the trained model is on
+the device (firmware v2), speech is detected with a simple rule: "the mouth
+mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.1.0` and no errors.
+   `ANC unit firmware 0.2.0` and a `canceller:` line, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
    python tools/record.py levels --port <native USB port>
    ```
-   - Both levels should be somewhere around −60 to −40 dBFS in a quiet room.
+   - Both levels should be somewhere around -60 to -40 dBFS in a quiet room.
    - Talk into **mic 1**: `primary` should jump by 20 dB or more.
    - Talk into **mic 2**: `reference` should jump.
-   - **−200** on a channel means all-zero data. Check SD / BCLK / WS wiring.
+   - **-200** on a channel means all-zero data. Check SD / BCLK / WS wiring.
    - **Both mics move together** when you talk into one: both L/R pins are
-     strapped the same way. Mic 1 L/R → GND, mic 2 L/R → 3V3.
+     strapped the same way. Mic 1 L/R -> GND, mic 2 L/R -> 3V3.
 3. **Listen through the speaker.** Put the speaker **at least 1 m** from the
-   mics, pointing away, volume low. Press the button:
-   `mute → primary → reference → mute`. Each press should switch mic.
-   If it howls, the speaker is too close. Press again to mute.
-4. **Record.** See "Collecting training data" below.
+   mics, pointing away, volume low. Press the **BOOT** button to step through:
+
+   | Press | Speaker plays |
+   |---|---|
+   | (start) | nothing |
+   | 1 | **raw**: mic 1 as it hears it |
+   | 2 | **cleaned**: mic 1 after the canceller |
+   | 3 | **reference**: mic 2 (wiring check) |
+   | 4 | nothing again |
+
+   If it howls, the speaker is too close. Press until it is quiet.
+4. **Before/after recording.** Play noise near the unit (fan, music, a
+   video of engine noise) and talk into mic 1:
+   ```
+   python tools/record.py record --port <native USB port> --cleaned --seconds 30
+   ```
+   The WAV has the raw mic on the left and the cleaned output on the right.
+   Listen to both sides and send the file for analysis.
+
+`record.py levels` also shows what the canceller is doing: `speech=1` while
+it thinks someone is talking, `ratio_db` (how much louder mic 1 is than
+mic 2), `rollbacks`, `guard_trips`, and `proc_us_max`, the worst time the
+canceller took for a 10 ms block (it must stay well under 10 000 us).
 
 ## Collecting training data
 

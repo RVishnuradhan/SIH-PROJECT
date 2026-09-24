@@ -7,7 +7,8 @@
  * both together.
  *
  * Deliberately avoided: GPIO 33-37 (octal PSRAM on R8 modules), 19/20 (native
- * USB), 0/3/45/46 (strapping) and 43/44 (console UART).
+ * USB), 3/45/46 (strapping) and 43/44 (console UART). GPIO 0 is only used
+ * through the on-board BOOT button, below.
  */
 
 /* I2S0: both INMP441s share these three lines. Mic 1 has L/R tied to GND and
@@ -26,5 +27,8 @@
 #define PIN_OLED_SDA  GPIO_NUM_8
 #define PIN_OLED_SCL  GPIO_NUM_9
 
-/* Push button to GND, internal pull-up. */
-#define PIN_BUTTON    GPIO_NUM_10
+/* The DevKit's own BOOT button (GPIO0, to GND with a pull-up on the board),
+ * so no extra button is needed. GPIO0 is a strapping pin, which only matters
+ * at reset: holding BOOT while resetting enters download mode, as usual.
+ * Reading it as an input once the firmware is running is safe. */
+#define PIN_BUTTON    GPIO_NUM_0

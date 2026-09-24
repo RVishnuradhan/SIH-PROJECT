@@ -78,7 +78,7 @@ keeps running with its current filter. The audio never drops out.
 | MCU | ESP32-S3-WROOM-1 **N16R8** (16 MB flash, 8 MB octal PSRAM) |
 | Mics | 2x INMP441 on one I2S bus, primary = L, reference = R (sample-locked) |
 | Output | MAX98357A I2S amp + speaker (demo stand-in for the HQ receiver) |
-| Display | SSD1306 128x64 OLED + dashboard on the board's own WiFi hotspot |
+| Display | 1.3" I2C OLED (SH1106, 4 pins) + dashboard on the board's own WiFi hotspot |
 | Power | USB power bank |
 
 ### Pinout
@@ -94,12 +94,12 @@ keeps running with its current filter. The audio never drops out.
 | | LRC | 16 |
 | | DIN | 17 |
 | | SD (mute) | 18 |
-| SSD1306 | SDA | 8 |
+| OLED (SH1106) | SDA | 8 |
 | | SCL | 9 |
-| Button | raw / cleaned toggle | 10 (to GND) |
+| Button | speaker mode (mute / raw / cleaned / reference) | the DevKit's own **BOOT** button (GPIO 0), nothing to wire |
 
-Do not use GPIO 33-37 (octal PSRAM), 19/20 (native USB), 0/3/45/46 (strapping)
-or 43/44 (console UART).
+Do not use GPIO 33-37 (octal PSRAM), 19/20 (native USB), 3/45/46 (strapping)
+or 43/44 (console UART). GPIO 0 is used only through the on-board BOOT button.
 
 Power the INMP441s from 3.3 V and the MAX98357A from 5 V. The MAX98357A output
 is bridge-tied: connect a speaker, **never headphones**.

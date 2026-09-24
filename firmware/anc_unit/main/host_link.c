@@ -86,6 +86,7 @@ link_cmd_t host_link_poll_command(void)
         switch (c) {
         case 'I': return LINK_CMD_INFO;
         case 'R': return LINK_CMD_START;
+        case 'P': return LINK_CMD_START_CLEANED;
         case 'S': return LINK_CMD_STOP;
         default: break; /* ignore newlines and noise */
         }
@@ -108,7 +109,7 @@ bool host_link_streaming(void)
     return atomic_load(&s_streaming);
 }
 
-void host_link_push_block(const int32_t *primary, const int32_t *reference, size_t frames)
+void host_link_push_block(const int32_t *primary, const int32_t *second, size_t frames)
 {
     if (!atomic_load(&s_streaming)) {
         return;
@@ -124,7 +125,7 @@ void host_link_push_block(const int32_t *primary, const int32_t *reference, size
     uint8_t *p = frame + LINK_HEADER_BYTES;
     for (size_t i = 0; i < frames; i++) {
         put_s24(p, primary[i]);
-        put_s24(p + 3, reference[i]);
+        put_s24(p + 3, second[i]);
         p += 2 * LINK_SAMPLE_BYTES;
     }
     size_t len = LINK_HEADER_BYTES + frames * 2 * LINK_SAMPLE_BYTES;

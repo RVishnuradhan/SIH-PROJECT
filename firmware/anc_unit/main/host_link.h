@@ -12,7 +12,9 @@
  *
  * Host -> device: single ASCII bytes.
  *   'I'  reply with one info line (only while not streaming)
- *   'R'  start streaming mic audio
+ *   'R'  start streaming: primary mic + reference mic (training data)
+ *   'P'  start streaming: primary mic + cleaned output (before/after test;
+ *        the cleaned channel lags the primary by the canceller delay)
  *   'S'  stop streaming
  *
  * Device -> host while streaming, one frame per 10 ms block:
@@ -33,6 +35,7 @@ typedef enum {
     LINK_CMD_NONE,
     LINK_CMD_INFO,
     LINK_CMD_START,
+    LINK_CMD_START_CLEANED,
     LINK_CMD_STOP,
 } link_cmd_t;
 
@@ -45,8 +48,9 @@ void host_link_set_streaming(bool on);
 bool host_link_streaming(void);
 
 /* Called from the audio task. Never blocks: if the USB side is behind, the
- * block is dropped and counted rather than stalling audio capture. */
-void host_link_push_block(const int32_t *primary, const int32_t *reference, size_t frames);
+ * block is dropped and counted rather than stalling audio capture. `second`
+ * is the reference mic or the cleaned output, depending on the command. */
+void host_link_push_block(const int32_t *primary, const int32_t *second, size_t frames);
 
 uint32_t host_link_blocks_sent(void);
 uint32_t host_link_blocks_dropped(void);

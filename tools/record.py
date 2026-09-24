@@ -63,8 +63,12 @@ def cmd_levels(args: argparse.Namespace) -> None:
     try:
         while True:
             fields = dict(kv.split("=", 1) for kv in query_info(ser).split()[1:])
-            print(f"\r primary {float(fields['lvl_primary']):7.1f}   "
-                  f"reference {float(fields['lvl_reference']):7.1f}   ", end="", flush=True)
+            line = (f"\r primary {float(fields['lvl_primary']):7.1f}   "
+                    f"reference {float(fields['lvl_reference']):7.1f}   ")
+            if "lvl_cleaned" in fields:           # firmware 0.2+: canceller running
+                line += (f"cleaned {float(fields['lvl_cleaned']):7.1f}   speech {fields['speech']}   "
+                         f"ratio {float(fields['ratio_db']):5.1f} dB   proc {fields['proc_us_max']} us   ")
+            print(line, end="", flush=True)
             time.sleep(1.0)
     except KeyboardInterrupt:
         print()
@@ -83,6 +87,8 @@ def cmd_record(args: argparse.Namespace) -> None:
             label = json.loads(sidecar.read_text()).get("labels")
     else:
         seconds = args.seconds
+    if label is None and args.cleaned:
+        label = []                     # before/after tests are not training data
     if label is None:
         sys.exit("give --label, or --play a file that has a .json sidecar with labels")
 
@@ -91,7 +97,7 @@ def cmd_record(args: argparse.Namespace) -> None:
     print(info)
 
     parser, blocks = FrameParser(), []
-    ser.write(b"R")
+    ser.write(b"P" if args.cleaned else b"R")
     t0 = time.time()
     if playback is not None:
         import sounddevice as sd  # only needed for re-recording
@@ -114,27 +120,30 @@ def cmd_record(args: argparse.Namespace) -> None:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    tag = label if isinstance(label, str) else "+".join(label) or "none"
+    tag = "cleaned" if args.cleaned else (label if isinstance(label, str) else "+".join(label) or "none")
     stem = out_dir / f"{tag}_{datetime.now():%Y%m%d_%H%M%S}"
     # 24-bit PCM, left = primary, right = reference.
     sf.write(stem.with_suffix(".wav"), samples.astype(np.float64) / FULL_SCALE_24,
              SAMPLE_RATE, subtype="PCM_24")
 
     rms_db = 20 * np.log10(np.sqrt(np.mean((samples / FULL_SCALE_24) ** 2, axis=0)) + 1e-12)
+    right = "cleaned" if args.cleaned else "reference"
     meta = {
         "labels": label,
+        "channels": ["primary", "cleaned"] if args.cleaned else ["primary", "reference"],
+        "cleaned_delay_samples": 16 if args.cleaned else None,
         "played": str(args.play) if args.play else None,
         "seconds": len(samples) / SAMPLE_RATE,
         "missing_blocks": int(missing),
         "device_reported_dropped": int(blocks[-1].dropped),
         "bytes_skipped": parser.bytes_skipped,
-        "level_dbfs": {"primary": round(float(rms_db[0]), 1), "reference": round(float(rms_db[1]), 1)},
+        "level_dbfs": {"primary": round(float(rms_db[0]), 1), right: round(float(rms_db[1]), 1)},
         "device_info": info,
         "notes": args.notes,
     }
     stem.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(f"saved {stem}.wav  ({meta['seconds']:.1f} s, {missing} blocks lost, "
-          f"primary {rms_db[0]:.1f} dBFS, reference {rms_db[1]:.1f} dBFS)")
+          f"primary {rms_db[0]:.1f} dBFS, {right} {rms_db[1]:.1f} dBFS)")
     if missing:
         print("warning: blocks were lost; USB could not keep up. Close other programs using the port.")
 
@@ -155,6 +164,8 @@ def main() -> None:
     rec.add_argument("--play", type=Path, help="play this WAV through the laptop while recording")
     rec.add_argument("--out", default="data/raw")
     rec.add_argument("--notes", default="", help="free text: where, what, mic distance")
+    rec.add_argument("--cleaned", action="store_true",
+                     help="record primary mic + canceller output instead of both mics (firmware 0.2+)")
     rec.set_defaults(func=cmd_record)
 
     args = ap.parse_args()
