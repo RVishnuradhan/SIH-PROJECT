@@ -24,7 +24,7 @@ from scipy.ndimage import maximum_filter1d, uniform_filter1d
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from anc.denoiser import denoise, gains_to_bins, features, load  # noqa: E402
+from anc.denoiser import denoise, highpass, load  # noqa: E402
 from anc.postfilter import PostfilterParams, apply_gains, stft, suppress  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("bds", ROOT / "tools/build_denoise_set.py")
@@ -35,7 +35,7 @@ db = lambda e: 10 * np.log10(e + 1e-20)  # noqa: E731
 
 @torch.no_grad()
 def nn_gains(model, x, floor_db=-30.0):
-    return denoise(model, x, floor_db)[1]
+    return denoise(model, x, floor_db, filtered=True)[1]     # the mixtures are pre-filtered
 
 
 def heldout(model, n_examples=60, snrs=(-5, 0, 5, 10)):
@@ -78,12 +78,15 @@ def real(model, paths, listen_dir: Path | None):
     print("\nReal recordings from the board (primary mic)")
     print(f"{'file':34s} | {'method':22s} | noise in pauses | voice")
     for p in paths:
-        x, fs = sf.read(p, dtype="float64", always_2d=True); pri = x[:, 0]
-        if np.mean(pri == 0) > 0.5:
+        x, fs = sf.read(p, dtype="float64", always_2d=True)
+        if np.mean(x[:, 0] == 0) > 0.5:
             continue
+        # Score against the high-passed mic: removing the board's sub-60 Hz
+        # rumble is wanted, and would otherwise count as lost voice.
+        pri = highpass(x[:, 0])
         eg = db(uniform_filter1d(pri ** 2, 1600)); gaps = eg < np.percentile(eg, 25); voice = eg > np.percentile(eg, 70)
         e = db(uniform_filter1d(pri ** 2, 160)); flag = maximum_filter1d(e > np.percentile(e, 15) + 6, 2400)
-        outs = {"neural (AI)": denoise(model, pri)[0], "old method (Wiener)": suppress(pri, flag)[0]}
+        outs = {"neural (AI)": denoise(model, pri, filtered=True)[0], "old method (Wiener)": suppress(pri, flag)[0]}
         for name, y in outs.items():
             print(f"{Path(p).name[-34:]:34s} | {name:22s} | {db(np.mean(y[gaps]**2)) - db(np.mean(pri[gaps]**2)):+8.1f} dB     | "
                   f"{db(np.mean(y[voice]**2)) - db(np.mean(pri[voice]**2)):+5.1f} dB")

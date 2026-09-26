@@ -68,6 +68,8 @@ def cmd_levels(args: argparse.Namespace) -> None:
             if "lvl_cleaned" in fields:           # firmware 0.2+: canceller running
                 line += (f"cleaned {float(fields['lvl_cleaned']):7.1f}   speech {fields['speech']}   "
                          f"ratio {float(fields['ratio_db']):5.1f} dB   proc {fields['proc_us_max']} us   ")
+            if fields.get("ai") == "1":           # firmware 0.3+: neural suppressor running
+                line += f"ai {float(fields['lvl_ai']):7.1f}   ai_gain {fields['ai_gain']}   "
             print(line, end="", flush=True)
             time.sleep(1.0)
     except KeyboardInterrupt:
@@ -95,6 +97,10 @@ def cmd_record(args: argparse.Namespace) -> None:
     ser = open_port(args.port)
     info = query_info(ser)
     print(info)
+    fields = dict(kv.split("=", 1) for kv in info.split()[1:] if "=" in kv)
+    # Firmware 0.3+ reports how far the output lags the primary mic; 0.2 had
+    # only the canceller's 16-sample delay.
+    out_delay = int(fields.get("out_delay", 16))
 
     parser, blocks = FrameParser(), []
     ser.write(b"P" if args.cleaned else b"R")
@@ -131,7 +137,7 @@ def cmd_record(args: argparse.Namespace) -> None:
     meta = {
         "labels": label,
         "channels": ["primary", "cleaned"] if args.cleaned else ["primary", "reference"],
-        "cleaned_delay_samples": 16 if args.cleaned else None,
+        "cleaned_delay_samples": out_delay if args.cleaned else None,
         "played": str(args.play) if args.play else None,
         "seconds": len(samples) / SAMPLE_RATE,
         "missing_blocks": int(missing),

@@ -24,17 +24,17 @@ from pathlib import Path  # noqa: E402
 
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
-from scipy.signal import butter, fftconvolve, sosfilt  # noqa: E402
+from scipy.signal import fftconvolve, sosfilt  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from anc import synth  # noqa: E402
 from anc.config import SAMPLE_RATE  # noqa: E402
-from anc.denoiser import features, ideal_gains  # noqa: E402
+from anc.denoiser import HIGHPASS_SOS, features, ideal_gains  # noqa: E402
 from anc.postfilter import stft  # noqa: E402
 
 SECONDS = 3.0
 N = int(SECONDS * SAMPLE_RATE)
-HPF = butter(1, 60, "highpass", fs=SAMPLE_RATE, output="sos")        # INMP441 roll-off
+HPF = HIGHPASS_SOS            # the device applies the same filter to its input
 SYNTH = [synth.engine_hum, synth.machinery_hum, synth.engine_rev, synth.vehicle_passby,
          synth.wind_gust, synth.impulse_burst, synth.impulse_burst]   # impulses twice: gunfire matters
 

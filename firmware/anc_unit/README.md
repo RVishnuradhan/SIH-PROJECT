@@ -32,16 +32,19 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.2.0` and a `canceller:` line.
+The monitor should print `ANC unit firmware 0.3.0`, a `canceller:` line and
+a `denoiser:` line.
 
-## Bring-up checklist (firmware 0.2)
+## Bring-up checklist (firmware 0.3)
 
-The board runs the two-mic noise canceller. Until the trained model is on
-the device (firmware v2), speech is detected with a simple rule: "the mouth
+The board runs the two-mic noise canceller and then the neural noise
+suppressor (the AI), both on the chip itself: no WiFi or internet is used.
+Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.2.0` and a `canceller:` line, with no errors.
+   `ANC unit firmware 0.3.0`, a `canceller:` line and a `denoiser:` line
+   saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
    python tools/record.py levels --port <native USB port>
@@ -59,9 +62,10 @@ mic is louder than the outward mic".
    |---|---|
    | (start) | nothing |
    | 1 | **raw**: mic 1 as it hears it |
-   | 2 | **cleaned**: mic 1 after the canceller |
-   | 3 | **reference**: mic 2 (wiring check) |
-   | 4 | nothing again |
+   | 2 | **ai**: mic 1 after the canceller and the AI (what HQ would hear) |
+   | 3 | **two-mic**: mic 1 after the canceller only |
+   | 4 | **reference**: mic 2 (wiring check) |
+   | 5 | nothing again |
 
    If it howls, the speaker is too close. Press until it is quiet.
 4. **Before/after recording.** Play noise near the unit (fan, music, a
@@ -69,13 +73,28 @@ mic is louder than the outward mic".
    ```
    python tools/record.py record --port <native USB port> --cleaned --seconds 30
    ```
-   The WAV has the raw mic on the left and the cleaned output on the right.
+   The WAV has the raw mic on the left and the final output (canceller +
+   AI) on the right, 15 ms later (`cleaned_delay_samples` in the JSON).
    Listen to both sides and send the file for analysis.
 
 `record.py levels` also shows what the canceller is doing: `speech=1` while
 it thinks someone is talking, `ratio_db` (how much louder mic 1 is than
 mic 2), `rollbacks`, `guard_trips`, and `proc_us_max`, the worst time the
-canceller took for a 10 ms block (it must stay well under 10 000 us).
+canceller and the AI together took for a 10 ms block (it must stay well
+under 10 000 us). `ai_gain` is how far the AI is turning the sound down
+(1 = not at all); the info line also has `ai_us_max`, the AI's share of
+the time.
+
+## Updating the AI
+
+The AI's weights are `main/denoiser.bin`, made from a trained model by
+
+```
+python tools/export_denoiser.py runs/denoiser/denoiser.pt
+```
+
+then rebuild and flash as above. Training happens once, on a laptop
+(`tools/train_denoiser.py`); the board only runs the result.
 
 ## Collecting training data
 
