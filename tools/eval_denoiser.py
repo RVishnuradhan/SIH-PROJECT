@@ -92,12 +92,16 @@ def real(model, paths, listen_dir: Path | None):
                   f"{db(np.mean(y[voice]**2)) - db(np.mean(pri[voice]**2)):+5.1f} dB")
         if listen_dir:
             y = outs["neural (AI)"]
-            q = (eg < np.percentile(eg, 30)).astype(float); W = 8 * fs
-            s0 = int(np.argmax(np.convolve(q, np.ones(W), "valid")))
+            # 8 s with as much talking AND as many pauses as possible, so the
+            # listener hears both the voice and the noise between words.
+            W = 8 * fs
+            q = np.convolve((eg < np.percentile(eg, 30)).astype(float), np.ones(W), "valid")
+            v = np.convolve((eg > np.percentile(eg, 60)).astype(float), np.ones(W), "valid")
+            s0 = int(np.argmax(np.minimum(q, v)))
             beep = 0.15 * np.sin(2 * np.pi * 1000 * np.arange(int(0.25 * fs)) / fs); gap = np.zeros(int(0.5 * fs))
             out = np.concatenate([pri[s0:s0 + W], gap, beep, gap, y[s0:s0 + W]])
             listen_dir.mkdir(parents=True, exist_ok=True)
-            sf.write(listen_dir / f"AB_AI_{Path(p).stem[-15:]}.wav", out / np.abs(out).max() * 0.9, fs, subtype="PCM_16")
+            sf.write(listen_dir / f"AB_AI_{Path(p).stem}.wav", out / np.abs(out).max() * 0.9, fs, subtype="PCM_16")
 
 
 def main() -> None:

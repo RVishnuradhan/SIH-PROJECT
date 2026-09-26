@@ -92,8 +92,45 @@ What the hardware taught us:
 - **A single-channel spectral suppressor** (learns the noise spectrum in
   speech pauses, turns those frequencies down, floor -15 dB) does not need
   the mics to agree, and gave +7 to +8 dB on the real recordings with the
-  voice level unchanged (within 0.6 dB). This is the stage that makes the
-  demo audibly cleaner, and it depends on the speech detector.
+  voice level unchanged (within 0.6 dB). In listening tests the difference
+  was hard to hear, because it only acts on noise it has learned in pauses.
+
+### Neural noise suppressor (firmware 0.3)
+
+A small recurrent network (Dense 64 -> GRU 96 -> GRU 96 -> 24 band gains,
+106k weights, same idea as RNNoise) that turns down every frequency band
+where it hears noise rather than voice, 125 times a second. It needs no
+speech detector and no second mic. It was trained once, on a laptop, on
+~2 h of mixtures of DNS Challenge speech and noise, synthetic battlefield
+sounds and the team's own recorded engine noise (`tools/build_denoise_set.py`,
+`tools/train_denoiser.py`). The board runs it in C with int8 weights
+(`firmware/anc_unit/components/anc_denoise`, 134 KB of internal RAM, 14 ms
+added latency) after the two-mic canceller. No network is involved.
+
+Held-out mixtures (speakers and noises never seen in training;
+`tools/eval_denoiser.py`). The old method was given the true talking/pause
+labels, which the AI is not:
+
+| Input SNR | Noise removed in pauses, AI / old | Voice quality (SNR after), AI / old |
+|---|---|---|
+| -5 dB | **15.9** / 9.0 dB | **11.2** / 9.7 dB |
+| 0 dB | **14.4** / 10.6 dB | **14.2** / 9.0 dB |
+| 5 dB | **13.3** / 11.0 dB | **18.4** / 11.2 dB |
+| 10 dB | **13.1** / 10.1 dB | **20.9** / 14.5 dB |
+
+The team's recordings from the board (mic 1, high-passed at 60 Hz):
+
+| Recording | Noise removed in pauses, AI / old | Voice level change, AI |
+|---|---|---|
+| Phone engine sound, voice close | **12.8** / 7.1 dB | -0.8 dB |
+| Fan, voice close | **12.5** / 6.0 dB | -2.1 dB |
+| Fan, voice farther | 12.3 / 12.7 dB | -1.8 dB |
+| Fan, mics 3 cm apart | **25.8** / 15.0 dB | -2.8 dB |
+
+One finding from the board: its mics pick up breath puffs and DC drift below
+20 Hz, up to 26 dB stronger than in the training speech, and the network
+took that for noise. The suppressor now high-passes its input at 60 Hz, like
+the training data.
 
 ### Why the classifier is not in the audio path
 
