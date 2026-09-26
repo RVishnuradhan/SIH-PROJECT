@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Recorded and generated audio stays out of git -- it is large and personal
+# (team voices). Share it through a drive link instead.
+data/
+*.wav
+runs/
+
+# ESP-IDF build output
+firmware/*/build/
+firmware/*/sdkconfig
+firmware/*/sdkconfig.old
+firmware/*/managed_components/
+firmware/*/dependencies.lock
+*.log
