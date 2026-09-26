@@ -64,6 +64,37 @@ on; speech in phrases with pauses; input SNR 0 dB.
 | **Divergence guard at 6 dB** | Without it, one missed phrase plus changing wind made the output 13 dB *worse* than the input. With it, no scene gets worse than the input, and the mean rises. A 1 dB threshold tripped on harmless speech leakage. |
 | **Noise type reported, not used for steering** | Tuning the step size per noise type gained only 0-2 dB; freezing during impulses made results worse (10.3 -> 8.6 dB). Mic clipping on loud bangs is not modelled yet. |
 
+### Results on the real hardware (ESP32-S3 + 2x INMP441, indoors)
+
+Recorded with `tools/record.py --cleaned` in a room with a ceiling fan, and
+with an engine sound played from a phone 1 m away; voice 2-3 cm from mic 1.
+"Voice vs noise gain" is how much louder the voice is relative to the noise
+after processing than before.
+
+| Processing | Fan | Phone engine sound |
+|---|---|---|
+| Two-mic NLMS canceller (firmware 0.2) | +3.4 dB | +0.4 dB |
+| **Spectral suppressor (second stage)**, offline on the same recordings | **+8.0 dB** | **+7.0 dB** |
+
+What the hardware taught us:
+
+- **Mic placement decides everything for the two-mic canceller.** With the
+  mics 3 cm apart, mic 2 heard the voice almost as loudly as mic 1 and the
+  canceller removed voice along with noise. At 14 cm (helmet geometry: boom
+  mic at the mouth, reference on the shell) the voice is ~13 dB louder at mic 1
+  and is preserved.
+- **Indoors, the noise at the two mics is only partly alike** (measured
+  coherence 0.74). An always-adapting filter removed ~8 dB of noise-only
+  engine sound, but a filter frozen during speech only ~2.5 dB, and adapting
+  during speech removes the voice. So the two-mic canceller alone cannot help
+  much in a reverberant room; it is expected to do better outdoors, where the
+  noise reaches both mics more directly.
+- **A single-channel spectral suppressor** (learns the noise spectrum in
+  speech pauses, turns those frequencies down, floor -15 dB) does not need
+  the mics to agree, and gave +7 to +8 dB on the real recordings with the
+  voice level unchanged (within 0.6 dB). This is the stage that makes the
+  demo audibly cleaner, and it depends on the speech detector.
+
 ### Why the classifier is not in the audio path
 
 The canceller runs on every sample. The classifier looks at 265 ms of audio and

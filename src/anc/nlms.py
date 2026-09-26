@@ -114,8 +114,9 @@ class GatedCanceller:
 
     def __init__(self, params: NlmsParams | None = None, block: int = 160,
                  rollback_blocks: int = 15, guard_db: float | None = 6.0,
-                 good_db: float = 3.0) -> None:
+                 good_db: float = 3.0, mu_speech: float = 0.0) -> None:
         self.nlms = NlmsCanceller(params)
+        self.mu_speech = mu_speech
         self.block = block
         self.rollback_blocks = rollback_blocks
         self.guard_db = guard_db
@@ -146,7 +147,7 @@ class GatedCanceller:
         if len(primary) != self.block:
             raise ValueError(f"expected blocks of {self.block} samples, got {len(primary)}")
         before = self._state()
-        mu = 0.0 if self._speech else self.nlms.p.mu
+        mu = self.mu_speech if self._speech else self.nlms.p.mu
         out = self.nlms.process(primary, reference, mu=mu)
 
         # The delayed primary for this block is what the output should never exceed.
