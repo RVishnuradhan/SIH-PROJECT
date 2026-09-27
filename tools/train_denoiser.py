@@ -43,7 +43,9 @@ def main() -> None:
     tr, va = np.load(a.train), np.load(a.val)
     Ft, Gt = torch.from_numpy(tr["features"].astype(np.float32)), torch.from_numpy(tr["gains"].astype(np.float32))
     Fv, Gv = torch.from_numpy(va["features"].astype(np.float32)), torch.from_numpy(va["gains"].astype(np.float32))
-    m = DenoiseNet(hidden=a.hidden)
+    mics = Ft.shape[-1] // 24          # 24 band energies per mic
+    m = DenoiseNet(hidden=a.hidden, mics=mics)
+    print(f"{mics}-mic model, {len(Ft)} training examples", flush=True)
     m.in_mean.copy_(Ft.reshape(-1, Ft.shape[-1]).mean(0))
     m.in_std.copy_(Ft.reshape(-1, Ft.shape[-1]).std(0) + 1e-3)
     opt = torch.optim.AdamW(m.parameters(), lr=a.lr, weight_decay=1e-4)
@@ -67,7 +69,7 @@ def main() -> None:
         print(f"epoch {ep:2d}  train {np.mean(losses):.4f}  val {vl:.4f}  ({time.time() - t0:.0f} s)", flush=True)
         if vl < best:
             best = vl
-            torch.save({"state_dict": m.state_dict(), "hidden": a.hidden}, a.out / "denoiser.pt")
+            torch.save({"state_dict": m.state_dict(), "hidden": a.hidden, "mics": mics}, a.out / "denoiser.pt")
     (a.out / "history.json").write_text(json.dumps(hist, indent=2))
     print(f"best val loss {best:.4f} -> {a.out}/denoiser.pt")
 

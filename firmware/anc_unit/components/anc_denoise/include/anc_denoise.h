@@ -4,6 +4,7 @@
  *
  * C port of anc.denoiser (Python). Every 8 ms (128 samples):
  *   60 Hz high-pass -> 256-sample frame, sqrt-Hann -> FFT -> log energy in 24 bands
+ *   (of the mouth mic, and for two-mic models also of the outward mic)
  *   -> Dense 64 (tanh) -> GRU 96 -> GRU 96 -> Dense 24 (sigmoid)
  *   -> 24 band gains spread over 129 FFT bins -> inverse FFT -> overlap-add.
  *
@@ -30,16 +31,19 @@ typedef struct {
 
 typedef struct {
     int bands, dense, hidden;
-    const float *in_mean, *in_std;   /* [bands] feature normalisation */
+    int mics;                        /* 1: mouth mic only; 2: also the outward mic */
+    const float *in_mean, *in_std;   /* [bands * mics] feature normalisation */
     const float *band_matrix;        /* [bands][bins]; columns sum to 1 */
     anc_dn_layer_t inp, gru1_ih, gru1_hh, gru2_ih, gru2_hh, out;
 
     float hp_b0, hp_b1, hp_a1, hp_z; /* input high-pass and its state */
+    float hp_z2;                     /* ... for the outward mic */
     float floor_gain;                /* smallest per-bin gain (-30 dB = 0.0316) */
     float *h1, *h2;                  /* GRU states [hidden] */
     float *scratch;                  /* layer outputs */
     float *gains;                    /* last band gains [bands] */
     float frame[ANC_DN_FRAME];       /* newest 256 input samples */
+    float frame2[ANC_DN_FRAME];      /* ... of the outward mic */
     float overlap[ANC_DN_HOP];       /* second half of the previous output frame */
     float re[ANC_DN_FRAME], im[ANC_DN_FRAME];
     float win[ANC_DN_FRAME];
@@ -48,7 +52,7 @@ typedef struct {
 
     /* Block adapter: any block size in, the same size out, fixed latency. */
     int block;
-    float *fifo_in, *fifo_out;
+    float *fifo_in, *fifo_in2, *fifo_out;
     int n_in, n_out;
 } anc_denoise_t;
 
@@ -60,11 +64,13 @@ size_t anc_denoise_mem_size(const void *blob, size_t len, int block);
 int anc_denoise_init(anc_denoise_t *d, const void *blob, size_t len, int block,
                      float floor_db, void *mem);
 
-/* One hop: 128 new samples in, 128 finished samples out, 128 samples late. */
-void anc_denoise_hop(anc_denoise_t *d, const float *in, float *out);
+/* One hop: 128 new samples in, 128 finished samples out, 128 samples late.
+ * `ref` is the outward mic, time-aligned with `in`; ignored (may be NULL)
+ * for a one-mic model. Only `in` is cleaned. */
+void anc_denoise_hop(anc_denoise_t *d, const float *in, const float *ref, float *out);
 
 /* `block` samples in, `block` out. Output lags input by anc_denoise_latency(). */
-void anc_denoise_process(anc_denoise_t *d, const float *in, float *out);
+void anc_denoise_process(anc_denoise_t *d, const float *in, const float *ref, float *out);
 
 /* Samples between a sample going in and the same sample coming out. */
 int anc_denoise_latency(const anc_denoise_t *d);

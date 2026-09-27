@@ -32,10 +32,10 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.3.0`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.4.0`, a `canceller:` line and
 a `denoiser:` line.
 
-## Bring-up checklist (firmware 0.3)
+## Bring-up checklist (firmware 0.4)
 
 The board runs the two-mic noise canceller and then the neural noise
 suppressor (the AI), both on the chip itself: no WiFi or internet is used.
@@ -43,7 +43,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.3.0`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.4.0`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```

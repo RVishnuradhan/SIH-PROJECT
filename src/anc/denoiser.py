@@ -74,18 +74,28 @@ def features(X: np.ndarray) -> np.ndarray:
     return np.log10(band_energy(X) + 1e-10).astype(np.float32)
 
 
+def features2(X1: np.ndarray, X2: np.ndarray) -> np.ndarray:
+    """Two-mic features: the band energies of both mics side by side. The
+    network learns the rule "loud at the mouth mic, faint at the outward mic
+    = voice"; unlike the two-mic canceller it needs only the levels to
+    differ, not the waveforms to match, so it works in echoey rooms too."""
+    return np.concatenate([features(X1), features(X2)], axis=-1)
+
+
 class DenoiseNet(nn.Module):
-    def __init__(self, hidden: int = 96) -> None:
+    def __init__(self, hidden: int = 96, mics: int = 1) -> None:
         super().__init__()
-        self.register_buffer("in_mean", torch.zeros(N_BANDS))
-        self.register_buffer("in_std", torch.ones(N_BANDS))
-        self.inp = nn.Sequential(nn.Linear(N_BANDS, 64), nn.Tanh())
+        self.mics = mics
+        n_in = N_BANDS * mics
+        self.register_buffer("in_mean", torch.zeros(n_in))
+        self.register_buffer("in_std", torch.ones(n_in))
+        self.inp = nn.Sequential(nn.Linear(n_in, 64), nn.Tanh())
         self.gru1 = nn.GRU(64, hidden, batch_first=True)
         self.gru2 = nn.GRU(hidden, hidden, batch_first=True)
         self.out = nn.Sequential(nn.Linear(hidden, N_BANDS), nn.Sigmoid())
 
     def forward(self, f: torch.Tensor, state=None):
-        """f: (batch, frames, bands) log band energies -> gains (batch, frames, bands)."""
+        """f: (batch, frames, bands * mics) log band energies -> gains (batch, frames, bands)."""
         h1, h2 = (None, None) if state is None else state
         x = self.inp((f - self.in_mean) / self.in_std)
         x, h1 = self.gru1(x, h1)
@@ -103,21 +113,28 @@ def gains_to_bins(g: np.ndarray) -> np.ndarray:
 
 
 @torch.no_grad()
-def denoise(model: DenoiseNet, x: np.ndarray, floor_db: float = -30.0, filtered: bool = False
-            ) -> tuple[np.ndarray, np.ndarray]:
+def denoise(model: DenoiseNet, x: np.ndarray, floor_db: float = -30.0, filtered: bool = False,
+            ref: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Run the network over a whole signal. Returns (output, per-bin gains).
+    `ref` is the outward mic, needed by two-mic models; only `x` is cleaned.
     `filtered=True` skips the high-pass, for input that has already had it."""
     model.eval()
-    x = np.asarray(x, np.float64)
-    X = stft(x if filtered else highpass(x))
-    g, _ = model(torch.from_numpy(features(X))[None])
+    prep = (lambda v: np.asarray(v, np.float64)) if filtered else (lambda v: highpass(np.asarray(v, np.float64)))
+    X = stft(prep(x))
+    if model.mics == 2:
+        if ref is None:
+            raise ValueError("two-mic model: pass ref=<outward mic>")
+        F = features2(X, stft(prep(ref)))
+    else:
+        F = features(X)
+    g, _ = model(torch.from_numpy(F)[None])
     G = np.maximum(gains_to_bins(g[0].numpy()), 10 ** (floor_db / 20))
     return istft(X * G, len(x)), G
 
 
 def load(path: Path) -> DenoiseNet:
     ck = torch.load(path, map_location="cpu")
-    m = DenoiseNet(hidden=ck.get("hidden", 96))
+    m = DenoiseNet(hidden=ck.get("hidden", 96), mics=ck.get("mics", 1))
     m.load_state_dict(ck["state_dict"])
     m.eval()
     return m
@@ -132,7 +149,7 @@ def load(path: Path) -> DenoiseNet:
 # builds that network in PyTorch, so the C port can be checked against it.
 
 BLOB_MAGIC = b"ANCD"
-BLOB_VERSION = 2
+BLOB_VERSION = 3
 
 
 def _layers(m: DenoiseNet):
@@ -154,7 +171,7 @@ def quantize_rows(w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 @torch.no_grad()
 def dequantized(model: DenoiseNet) -> DenoiseNet:
     """Copy of `model` with every weight matrix replaced by its int8 version."""
-    m = DenoiseNet(hidden=model.gru1.hidden_size)
+    m = DenoiseNet(hidden=model.gru1.hidden_size, mics=model.mics)
     m.load_state_dict(model.state_dict())
     for w, _ in _layers(m):
         q, s = quantize_rows(w.numpy())
@@ -166,9 +183,9 @@ def dequantized(model: DenoiseNet) -> DenoiseNet:
 def export_blob(model: DenoiseNet) -> bytes:
     """Serialise for firmware/anc_unit/components/anc_denoise (little-endian):
 
-    "ANCD", u32 version, u32 bands, u32 dense, u32 hidden, u32 bins,
+    "ANCD", u32 version, u32 bands, u32 dense, u32 hidden, u32 bins, u32 mics,
     f32 highpass b0, b1, a1 (y = b0 x + b1 x[-1] - a1 y[-1]),
-    f32 in_mean[bands], f32 in_std[bands], f32 band_matrix[bands][bins],
+    f32 in_mean[bands * mics], f32 in_std[bands * mics], f32 band_matrix[bands][bins],
     then per layer (input dense, gru1 ih, gru1 hh, gru2 ih, gru2 hh, output):
     u32 rows, u32 cols, f32 scale[rows], f32 bias[rows], i8 w[rows][cols]
     (padded to 4 bytes).
@@ -177,7 +194,7 @@ def export_blob(model: DenoiseNet) -> bytes:
     hidden = model.gru1.hidden_size
     dense = model.inp[0].out_features
     b0, b1, _, _, a1, _ = HIGHPASS_SOS[0]
-    parts = [BLOB_MAGIC, struct.pack("<5I", BLOB_VERSION, N_BANDS, dense, hidden, N_BINS),
+    parts = [BLOB_MAGIC, struct.pack("<6I", BLOB_VERSION, N_BANDS, dense, hidden, N_BINS, model.mics),
              struct.pack("<3f", b0, b1, a1), model.in_mean.numpy().astype("<f4").tobytes(), model.in_std.numpy().astype("<f4").tobytes(),
              BANDS.astype("<f4").tobytes()]
     for w, b in _layers(model):

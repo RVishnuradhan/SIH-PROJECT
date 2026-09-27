@@ -29,12 +29,14 @@ def main() -> None:
     a.out.write_bytes(blob)
 
     # How much the int8 rounding changes the output, on a test signal.
-    x = np.random.default_rng(0).standard_normal(3 * 16000) * 0.01
-    full, _ = denoise(m, x)
-    q, _ = denoise(dequantized(m), x)
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(3 * 16000) * 0.01
+    ref = rng.standard_normal(3 * 16000) * 0.01 if m.mics == 2 else None
+    full, _ = denoise(m, x, ref=ref)
+    q, _ = denoise(dequantized(m), x, ref=ref)
     err = 10 * np.log10(np.sum(full ** 2) / np.sum((full - q) ** 2))
     n = sum(p.numel() for p in m.parameters())
-    print(f"{a.out}: {len(blob)} bytes, {n} weights; int8 rounding changes the output by {err:.0f} dB below the signal")
+    print(f"{a.out}: {m.mics}-mic model, {len(blob)} bytes, {n} weights; int8 rounding changes the output by {err:.0f} dB below the signal")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@
  * Audio task (core 1), every 10 ms block:
  *   both mics -> level-ratio speech detector -> gated NLMS canceller
  *   (freeze during speech, 150 ms rollback, divergence guard)
- *   -> neural suppressor (anc_denoise, weights in main/denoiser.bin) -> speaker.
+ *   -> neural suppressor (anc_denoise, weights in main/denoiser.bin; a two-mic
+ *   model also listens to the outward mic) -> speaker.
  *
  * BOOT button cycles the speaker: mute -> raw (primary mic) -> ai (full
  * chain) -> two-mic (canceller only) -> reference mic -> mute. Raw vs ai is
@@ -21,6 +22,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "anc_core.h"
 #include "anc_denoise.h"
@@ -35,7 +37,7 @@
 #include "freertos/task.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.3.0"
+#define FW_VERSION "0.4.0"
 
 static const char *TAG = "main";
 
@@ -107,6 +109,10 @@ static void audio_task(void *arg)
     static int32_t primary[AUDIO_BLOCK_FRAMES], reference[AUDIO_BLOCK_FRAMES];
     static float p[AUDIO_BLOCK_FRAMES], r[AUDIO_BLOCK_FRAMES], clean[AUDIO_BLOCK_FRAMES];
     static float ai[AUDIO_BLOCK_FRAMES];
+    /* The canceller output lags the mics by cfg.delay samples; a two-mic AI
+     * needs the outward mic lagged the same, so both describe the same moment. */
+    static float r_late[AUDIO_BLOCK_FRAMES], r_hist[AUDIO_BLOCK_FRAMES];
+    const int lag = s_anc.cfg.delay;
     static int32_t final24[AUDIO_BLOCK_FRAMES];
     static int16_t out[AUDIO_BLOCK_FRAMES];
     double acc_p = 0, acc_r = 0, acc_c = 0, acc_a = 0;
@@ -133,7 +139,11 @@ static void audio_task(void *arg)
         int64_t t1 = esp_timer_get_time();
         const float *final = clean;
         if (s_dn_ok) {
-            anc_denoise_process(&s_dn, clean, ai);
+            for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) {
+                r_late[i] = i < lag ? r_hist[AUDIO_BLOCK_FRAMES - lag + i] : r[i - lag];
+            }
+            memcpy(r_hist, r, sizeof(r_hist));
+            anc_denoise_process(&s_dn, clean, r_late, ai);
             final = ai;
         }
         int64_t t2 = esp_timer_get_time();
@@ -270,8 +280,8 @@ static void init_denoiser(void)
         return;
     }
     s_dn_ok = true;
-    ESP_LOGI(TAG, "denoiser: %d bands, GRU %d, %u bytes in %s RAM, latency %d samples",
-             s_dn.bands, s_dn.hidden, (unsigned)need, internal ? "internal" : "PSRAM",
+    ESP_LOGI(TAG, "denoiser: %d-mic, %d bands, GRU %d, %u bytes in %s RAM, latency %d samples",
+             s_dn.mics, s_dn.bands, s_dn.hidden, (unsigned)need, internal ? "internal" : "PSRAM",
              anc_denoise_latency(&s_dn));
 }
 

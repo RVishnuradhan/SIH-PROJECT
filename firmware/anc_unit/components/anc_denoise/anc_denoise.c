@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <string.h>
 
-#define BLOB_VERSION 2
+#define BLOB_VERSION 3
 #define PI_F 3.14159265358979f
 
 /* ---- Blob parsing --------------------------------------------------------
@@ -100,19 +100,21 @@ static bool walk(walker_t *w, anc_denoise_t *d, int block)
     d->dense = (int)rd_u32(w);
     d->hidden = (int)rd_u32(w);
     uint32_t bins = rd_u32(w);
-    if (!w->ok || version != BLOB_VERSION || bins != ANC_DN_BINS || d->bands <= 0 ||
+    d->mics = (int)rd_u32(w);
+    if (!w->ok || version != BLOB_VERSION || bins != ANC_DN_BINS || d->mics < 1 || d->mics > 2 ||
+        d->bands <= 0 ||
         d->bands > 64 || d->dense <= 0 || d->dense > 512 || d->hidden <= 0 || d->hidden > 512 ||
         block <= 0) {
         return false;
     }
-    const int B = d->bands, D = d->dense, H = d->hidden;
+    const int B = d->bands, D = d->dense, H = d->hidden, F = d->bands * d->mics;
     d->hp_b0 = rd_f32(w);
     d->hp_b1 = rd_f32(w);
     d->hp_a1 = rd_f32(w);
-    d->in_mean = copy(w, sizeof(float) * B);
-    d->in_std = copy(w, sizeof(float) * B);
+    d->in_mean = copy(w, sizeof(float) * F);
+    d->in_std = copy(w, sizeof(float) * F);
     d->band_matrix = copy(w, sizeof(float) * B * ANC_DN_BINS);
-    read_layer(w, &d->inp, D, B);
+    read_layer(w, &d->inp, D, F);
     read_layer(w, &d->gru1_ih, 3 * H, D);
     read_layer(w, &d->gru1_hh, 3 * H, H);
     read_layer(w, &d->gru2_ih, 3 * H, H);
@@ -122,9 +124,10 @@ static bool walk(walker_t *w, anc_denoise_t *d, int block)
 
     d->h1 = reserve(w, sizeof(float) * H);
     d->h2 = reserve(w, sizeof(float) * H);
-    d->scratch = reserve(w, sizeof(float) * (B + D + 6 * H + ANC_DN_BINS));
+    d->scratch = reserve(w, sizeof(float) * (F + D + 6 * H + ANC_DN_BINS));
     d->gains = reserve(w, sizeof(float) * B);
     d->fifo_in = reserve(w, sizeof(float) * ANC_DN_HOP);
+    d->fifo_in2 = d->mics == 2 ? reserve(w, sizeof(float) * ANC_DN_HOP) : NULL;
     d->fifo_out = reserve(w, sizeof(float) * (block + 2 * ANC_DN_HOP));
     return true;
 }
@@ -235,35 +238,53 @@ static void gru(const anc_dn_layer_t *ih, const anc_dn_layer_t *hh, const float 
 
 /* ---- Processing ----------------------------------------------------------- */
 
-void anc_denoise_hop(anc_denoise_t *d, const float *in, float *out)
+/* Shift in one hop through the 60 Hz high-pass (transposed direct form, as
+ * scipy's sosfilt), window the frame and take its spectrum into re/im. */
+static void analyse(anc_denoise_t *d, float *frame, float *hp_z, const float *in)
 {
-    const int B = d->bands, D = d->dense, H = d->hidden, N = ANC_DN_FRAME;
-    float *feat = d->scratch, *dense = feat + B, *gi = dense + D, *gh = gi + 3 * H;
-    float *power = gh + 3 * H;
-    float *re = d->re, *im = d->im;
-
-    memmove(d->frame, d->frame + ANC_DN_HOP, sizeof(float) * (N - ANC_DN_HOP));
-    float *fresh = d->frame + N - ANC_DN_HOP;
+    const int N = ANC_DN_FRAME;
+    memmove(frame, frame + ANC_DN_HOP, sizeof(float) * (N - ANC_DN_HOP));
+    float *fresh = frame + N - ANC_DN_HOP;
     for (int i = 0; i < ANC_DN_HOP; i++) {
-        /* 60 Hz high-pass, transposed direct form (as scipy's sosfilt) */
-        float y = d->hp_b0 * in[i] + d->hp_z;
-        d->hp_z = d->hp_b1 * in[i] - d->hp_a1 * y;
+        float y = d->hp_b0 * in[i] + *hp_z;
+        *hp_z = d->hp_b1 * in[i] - d->hp_a1 * y;
         fresh[i] = y;
     }
     for (int i = 0; i < N; i++) {
-        re[i] = d->frame[i] * d->win[i];
-        im[i] = 0.0f;
+        d->re[i] = frame[i] * d->win[i];
+        d->im[i] = 0.0f;
     }
-    fft(d, re, im, false);
+    fft(d, d->re, d->im, false);
+}
 
-    /* Features: log10 energy per band, normalised as in training. */
-    for (int k = 0; k < ANC_DN_BINS; k++) power[k] = re[k] * re[k] + im[k] * im[k];
-    for (int b = 0; b < B; b++) {
+/* log10 energy per band of the spectrum in re/im, normalised as in training. */
+static void band_features(const anc_denoise_t *d, float *power, float *feat, int offset)
+{
+    for (int k = 0; k < ANC_DN_BINS; k++) power[k] = d->re[k] * d->re[k] + d->im[k] * d->im[k];
+    for (int b = 0; b < d->bands; b++) {
         const float *row = d->band_matrix + b * ANC_DN_BINS;
         float e = 0.0f;
         for (int k = 0; k < ANC_DN_BINS; k++) e += row[k] * power[k];
-        feat[b] = (log10f(e + 1e-10f) - d->in_mean[b]) / d->in_std[b];
+        int f = offset + b;
+        feat[f] = (log10f(e + 1e-10f) - d->in_mean[f]) / d->in_std[f];
     }
+}
+
+void anc_denoise_hop(anc_denoise_t *d, const float *in, const float *ref, float *out)
+{
+    const int B = d->bands, D = d->dense, H = d->hidden, N = ANC_DN_FRAME;
+    float *feat = d->scratch, *dense = feat + B * d->mics, *gi = dense + D, *gh = gi + 3 * H;
+    float *power = gh + 3 * H;
+    float *re = d->re, *im = d->im;
+
+    /* Outward mic first: only its band energies are needed, and the mouth
+     * mic's spectrum must be left in re/im to apply the gains to. */
+    if (d->mics == 2) {
+        analyse(d, d->frame2, &d->hp_z2, ref);
+        band_features(d, power, feat, B);
+    }
+    analyse(d, d->frame, &d->hp_z, in);
+    band_features(d, power, feat, 0);
 
     linear(&d->inp, feat, dense);
     for (int j = 0; j < D; j++) dense[j] = tanhf(dense[j]);
@@ -293,16 +314,17 @@ void anc_denoise_hop(anc_denoise_t *d, const float *in, float *out)
     }
 }
 
-void anc_denoise_process(anc_denoise_t *d, const float *in, float *out)
+void anc_denoise_process(anc_denoise_t *d, const float *in, const float *ref, float *out)
 {
     for (int k = 0; k < d->block;) {
         int take = ANC_DN_HOP - d->n_in;
         if (take > d->block - k) take = d->block - k;
         memcpy(d->fifo_in + d->n_in, in + k, sizeof(float) * take);
+        if (d->fifo_in2) memcpy(d->fifo_in2 + d->n_in, ref + k, sizeof(float) * take);
         d->n_in += take;
         k += take;
         if (d->n_in == ANC_DN_HOP) {
-            anc_denoise_hop(d, d->fifo_in, d->fifo_out + d->n_out);
+            anc_denoise_hop(d, d->fifo_in, d->fifo_in2, d->fifo_out + d->n_out);
             d->n_out += ANC_DN_HOP;
             d->n_in = 0;
         }
