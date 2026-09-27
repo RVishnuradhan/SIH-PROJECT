@@ -112,23 +112,62 @@ def gains_to_bins(g: np.ndarray) -> np.ndarray:
     return g @ BANDS
 
 
+RULE_SMOOTH = 0.7     # per-hop smoothing of the power spectra the level rule compares
+RULE_TALK = 0.7       # network's mean band gain above which it is surely hearing voice
+RULE_LEAK_UP, RULE_LEAK_DOWN = 0.998, 0.95   # leak estimate: rises slowly, falls fast
+RULE_LEAK_START = 0.1                        # -10 dB until the first words
+RULE_LEAK_BINS = slice(10, 97)               # ~600-6000 Hz
+
+
+def level_rule_gains(X1: np.ndarray, X2: np.ndarray, g: np.ndarray, alpha: float = 1.0,
+                     floor_db: float = -25.0) -> np.ndarray:
+    """Two-mic level rule, applied on top of the network's gains `g` (frames, bands).
+
+    Voice is louder at the mouth mic than at the outward mic; noise mostly is
+    not. Per FFT bin the rule turns down whatever part of the outward/mouth
+    power ratio (both smoothed over ~20 ms) is above the voice's own ratio L:
+    gain = 1 - alpha * max(ratio - L, 0) / (1 - L). It needs only levels to
+    differ, so it works in rooms where the mics' noise is too unalike for the
+    canceller. The team preferred it by ear on the board's engine recording.
+
+    L (how much voice reaches the outward mic) depends on where the mics sit,
+    so it is learned while the network is sure it hears voice, as the lower
+    envelope of the ratio: noise at the outward mic can only raise the ratio,
+    so the lower envelope is the voice's. A fixed L cost 11 dB of voice on a
+    recording where the two mics heard the voice almost equally."""
+    P, R = np.abs(X1) ** 2, np.abs(X2) ** 2
+    sp, sr, L = np.zeros(P.shape[1]), np.zeros(P.shape[1]), RULE_LEAK_START
+    G = np.empty_like(P)
+    for i in range(len(P)):
+        sp = RULE_SMOOTH * sp + (1 - RULE_SMOOTH) * P[i]
+        sr = RULE_SMOOTH * sr + (1 - RULE_SMOOTH) * R[i]
+        if g[i].mean() > RULE_TALK:
+            q = min(sr[RULE_LEAK_BINS].sum() / (sp[RULE_LEAK_BINS].sum() + 1e-12), 1.0)
+            a = RULE_LEAK_UP if q > L else RULE_LEAK_DOWN
+            L = a * L + (1 - a) * q
+        G[i] = 1 - alpha * np.maximum(sr / (sp + 1e-12) - L, 0) / (1 - min(L, 0.9))
+    return np.clip(G, 10 ** (floor_db / 20), 1.0)
+
+
 @torch.no_grad()
 def denoise(model: DenoiseNet, x: np.ndarray, floor_db: float = -30.0, filtered: bool = False,
-            ref: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+            ref: np.ndarray | None = None, rule_alpha: float = 0.0, rule_floor_db: float = -25.0
+            ) -> tuple[np.ndarray, np.ndarray]:
     """Run the network over a whole signal. Returns (output, per-bin gains).
-    `ref` is the outward mic, needed by two-mic models; only `x` is cleaned.
+    `ref` is the outward mic, needed by two-mic models and by the level rule
+    (`rule_alpha` > 0, see level_rule_gains); only `x` is cleaned.
     `filtered=True` skips the high-pass, for input that has already had it."""
     model.eval()
     prep = (lambda v: np.asarray(v, np.float64)) if filtered else (lambda v: highpass(np.asarray(v, np.float64)))
     X = stft(prep(x))
-    if model.mics == 2:
-        if ref is None:
-            raise ValueError("two-mic model: pass ref=<outward mic>")
-        F = features2(X, stft(prep(ref)))
-    else:
-        F = features(X)
+    if (model.mics == 2 or rule_alpha > 0) and ref is None:
+        raise ValueError("pass ref=<outward mic> for a two-mic model or the level rule")
+    Xr = stft(prep(ref)) if ref is not None else None
+    F = features2(X, Xr) if model.mics == 2 else features(X)
     g, _ = model(torch.from_numpy(F)[None])
     G = np.maximum(gains_to_bins(g[0].numpy()), 10 ** (floor_db / 20))
+    if rule_alpha > 0:
+        G = G * level_rule_gains(X, Xr, g[0].numpy(), rule_alpha, rule_floor_db)
     return istft(X * G, len(x)), G
 
 

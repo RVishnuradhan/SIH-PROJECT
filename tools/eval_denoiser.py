@@ -39,6 +39,9 @@ def nn_gains(model, x, floor_db=-30.0):
 
 
 def heldout(model, n_examples=60, snrs=(-5, 0, 5, 10)):
+    if model.mics == 2:
+        print("\nHeld-out one-mic mixtures skipped: this is a two-mic model")
+        return
     clean, noise, real = bds.file_lists(ROOT / "data", "val")
     bds._init(clean, noise, [])
     print(f"\nHeld-out mixtures ({n_examples} per SNR; unseen speakers and noises)")
@@ -74,7 +77,7 @@ def heldout(model, n_examples=60, snrs=(-5, 0, 5, 10)):
             print(f"{snr:>8} dB | {name:22s} | {v[0]:+8.1f} dB         | {v[1]:+8.1f} dB     | {v[2]:6.1f} dB")
 
 
-def real(model, paths, listen_dir: Path | None):
+def real(model, paths, listen_dir: Path | None, rule: float = 0.0):
     print("\nReal recordings from the board (primary mic)")
     print(f"{'file':34s} | {'method':22s} | noise in pauses | voice")
     for p in paths:
@@ -84,9 +87,13 @@ def real(model, paths, listen_dir: Path | None):
         # Score against the high-passed mic: removing the board's sub-60 Hz
         # rumble is wanted, and would otherwise count as lost voice.
         pri = highpass(x[:, 0])
+        ref = highpass(x[:, 1]) if x.shape[1] > 1 else None
+        if (model.mics == 2 or rule) and ref is None:
+            continue
         eg = db(uniform_filter1d(pri ** 2, 1600)); gaps = eg < np.percentile(eg, 25); voice = eg > np.percentile(eg, 70)
         e = db(uniform_filter1d(pri ** 2, 160)); flag = maximum_filter1d(e > np.percentile(e, 15) + 6, 2400)
-        outs = {"neural (AI)": denoise(model, pri, filtered=True)[0], "old method (Wiener)": suppress(pri, flag)[0]}
+        outs = {"neural (AI)": denoise(model, pri, filtered=True, ref=ref, rule_alpha=rule)[0],
+                "old method (Wiener)": suppress(pri, flag)[0]}
         for name, y in outs.items():
             print(f"{Path(p).name[-34:]:34s} | {name:22s} | {db(np.mean(y[gaps]**2)) - db(np.mean(pri[gaps]**2)):+8.1f} dB     | "
                   f"{db(np.mean(y[voice]**2)) - db(np.mean(pri[voice]**2)):+5.1f} dB")
@@ -110,12 +117,13 @@ def main() -> None:
     ap.add_argument("--real", nargs="*", default=[])
     ap.add_argument("--listen-dir", type=Path)
     ap.add_argument("--n", type=int, default=60)
+    ap.add_argument("--rule", type=float, default=0.0, help="two-mic level rule strength (firmware: 1.0)")
     a = ap.parse_args()
     torch.set_num_threads(2)
     m = load(a.model)
     heldout(m, a.n)
     if a.real:
-        real(m, a.real, a.listen_dir)
+        real(m, a.real, a.listen_dir, a.rule)
 
 
 if __name__ == "__main__":

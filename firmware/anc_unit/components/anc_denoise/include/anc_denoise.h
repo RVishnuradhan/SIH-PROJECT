@@ -6,7 +6,8 @@
  *   60 Hz high-pass -> 256-sample frame, sqrt-Hann -> FFT -> log energy in 24 bands
  *   (of the mouth mic, and for two-mic models also of the outward mic)
  *   -> Dense 64 (tanh) -> GRU 96 -> GRU 96 -> Dense 24 (sigmoid)
- *   -> 24 band gains spread over 129 FFT bins -> inverse FFT -> overlap-add.
+ *   -> 24 band gains spread over 129 FFT bins
+ *   -> optional two-mic level rule (anc_denoise_set_rule) -> inverse FFT -> overlap-add.
  *
  * The weights come from tools/export_denoiser.py as one blob (int8 weights
  * with a float scale per row). tests/test_denoiser_c.py checks this code
@@ -39,6 +40,9 @@ typedef struct {
     float hp_b0, hp_b1, hp_a1, hp_z; /* input high-pass and its state */
     float hp_z2;                     /* ... for the outward mic */
     float floor_gain;                /* smallest per-bin gain (-30 dB = 0.0316) */
+    float rule_alpha, rule_floor;    /* level rule; alpha 0 = off */
+    float rule_leak;                 /* learned outward/mouth power ratio of the voice */
+    float rule_sp[ANC_DN_BINS], rule_sr[ANC_DN_BINS];   /* smoothed mouth / outward mic power */
     float *h1, *h2;                  /* GRU states [hidden] */
     float *scratch;                  /* layer outputs */
     float *gains;                    /* last band gains [bands] */
@@ -64,9 +68,15 @@ size_t anc_denoise_mem_size(const void *blob, size_t len, int block);
 int anc_denoise_init(anc_denoise_t *d, const void *blob, size_t len, int block,
                      float floor_db, void *mem);
 
+/* Two-mic level rule on top of the network (anc.denoiser.level_rule_gains):
+ * per bin, gain *= clip(1 - alpha * max(ratio - leak, 0) / (1 - leak), floor, 1)
+ * with ratio = outward / mouth mic power and leak learned from the voice.
+ * Needs `ref` in every call. alpha 0 turns it off (the default). */
+void anc_denoise_set_rule(anc_denoise_t *d, float alpha, float floor_db);
+
 /* One hop: 128 new samples in, 128 finished samples out, 128 samples late.
- * `ref` is the outward mic, time-aligned with `in`; ignored (may be NULL)
- * for a one-mic model. Only `in` is cleaned. */
+ * `ref` is the outward mic, time-aligned with `in`; may be NULL for a
+ * one-mic model with the level rule off. Only `in` is cleaned. */
 void anc_denoise_hop(anc_denoise_t *d, const float *in, const float *ref, float *out);
 
 /* `block` samples in, `block` out. Output lags input by anc_denoise_latency(). */

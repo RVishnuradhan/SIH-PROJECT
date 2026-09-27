@@ -6,6 +6,14 @@
 
 #define BLOB_VERSION 3
 #define PI_F 3.14159265358979f
+/* Level rule constants: anc.denoiser.RULE_* */
+#define RULE_SMOOTH 0.7f
+#define RULE_TALK 0.7f
+#define RULE_LEAK_UP 0.998f
+#define RULE_LEAK_DOWN 0.95f
+#define RULE_LEAK_START 0.1f
+#define RULE_LEAK_LO 10
+#define RULE_LEAK_HI 97
 
 /* ---- Blob parsing --------------------------------------------------------
  * One walk over the blob serves both mem_size (counting) and init (copying
@@ -127,7 +135,7 @@ static bool walk(walker_t *w, anc_denoise_t *d, int block)
     d->scratch = reserve(w, sizeof(float) * (F + D + 6 * H + ANC_DN_BINS));
     d->gains = reserve(w, sizeof(float) * B);
     d->fifo_in = reserve(w, sizeof(float) * ANC_DN_HOP);
-    d->fifo_in2 = d->mics == 2 ? reserve(w, sizeof(float) * ANC_DN_HOP) : NULL;
+    d->fifo_in2 = reserve(w, sizeof(float) * ANC_DN_HOP);
     d->fifo_out = reserve(w, sizeof(float) * (block + 2 * ANC_DN_HOP));
     return true;
 }
@@ -257,10 +265,19 @@ static void analyse(anc_denoise_t *d, float *frame, float *hp_z, const float *in
     fft(d, d->re, d->im, false);
 }
 
-/* log10 energy per band of the spectrum in re/im, normalised as in training. */
-static void band_features(const anc_denoise_t *d, float *power, float *feat, int offset)
+/* Power spectrum of re/im into `power`, and into the level rule's running
+ * average `smooth` (as anc.denoiser.level_rule_gains). */
+static void spectrum_power(const anc_denoise_t *d, float *power, float *smooth)
 {
-    for (int k = 0; k < ANC_DN_BINS; k++) power[k] = d->re[k] * d->re[k] + d->im[k] * d->im[k];
+    for (int k = 0; k < ANC_DN_BINS; k++) {
+        power[k] = d->re[k] * d->re[k] + d->im[k] * d->im[k];
+        smooth[k] = RULE_SMOOTH * smooth[k] + (1.0f - RULE_SMOOTH) * power[k];
+    }
+}
+
+/* log10 energy per band of `power`, normalised as in training. */
+static void band_features(const anc_denoise_t *d, const float *power, float *feat, int offset)
+{
     for (int b = 0; b < d->bands; b++) {
         const float *row = d->band_matrix + b * ANC_DN_BINS;
         float e = 0.0f;
@@ -277,13 +294,16 @@ void anc_denoise_hop(anc_denoise_t *d, const float *in, const float *ref, float 
     float *power = gh + 3 * H;
     float *re = d->re, *im = d->im;
 
-    /* Outward mic first: only its band energies are needed, and the mouth
-     * mic's spectrum must be left in re/im to apply the gains to. */
-    if (d->mics == 2) {
+    /* Outward mic first: only its levels are needed, and the mouth mic's
+     * spectrum must be left in re/im to apply the gains to. */
+    const bool rule = d->rule_alpha > 0.0f;
+    if (d->mics == 2 || rule) {
         analyse(d, d->frame2, &d->hp_z2, ref);
-        band_features(d, power, feat, B);
+        spectrum_power(d, power, d->rule_sr);
+        if (d->mics == 2) band_features(d, power, feat, B);
     }
     analyse(d, d->frame, &d->hp_z, in);
+    spectrum_power(d, power, d->rule_sp);
     band_features(d, power, feat, 0);
 
     linear(&d->inp, feat, dense);
@@ -293,11 +313,34 @@ void anc_denoise_hop(anc_denoise_t *d, const float *in, const float *ref, float 
     linear(&d->out, d->h2, d->gains);
     for (int b = 0; b < B; b++) d->gains[b] = sigmoid(d->gains[b]);
 
+    /* Level rule: learn how much voice reaches the outward mic (lower
+     * envelope of the power ratio while the network surely hears voice). */
+    float leak_scale = 0.0f;
+    if (rule) {
+        if (anc_denoise_mean_gain(d) > RULE_TALK) {
+            float num = 0.0f, den = 0.0f;
+            for (int k = RULE_LEAK_LO; k < RULE_LEAK_HI; k++) {
+                num += d->rule_sr[k];
+                den += d->rule_sp[k];
+            }
+            float q = num / (den + 1e-12f);
+            if (q > 1.0f) q = 1.0f;
+            float a = q > d->rule_leak ? RULE_LEAK_UP : RULE_LEAK_DOWN;
+            d->rule_leak = a * d->rule_leak + (1.0f - a) * q;
+        }
+        leak_scale = d->rule_alpha / (1.0f - (d->rule_leak < 0.9f ? d->rule_leak : 0.9f));
+    }
+
     /* Band gains -> bin gains, then rebuild the full spectrum of a real signal. */
     for (int k = 0; k < ANC_DN_BINS; k++) {
         float g = 0.0f;
         for (int b = 0; b < B; b++) g += d->gains[b] * d->band_matrix[b * ANC_DN_BINS + k];
         if (g < d->floor_gain) g = d->floor_gain;
+        if (rule) {
+            float excess = d->rule_sr[k] / (d->rule_sp[k] + 1e-12f) - d->rule_leak;
+            float q = 1.0f - leak_scale * (excess > 0.0f ? excess : 0.0f);
+            g *= q < d->rule_floor ? d->rule_floor : q > 1.0f ? 1.0f : q;
+        }
         re[k] *= g;
         im[k] *= g;
     }
@@ -320,11 +363,11 @@ void anc_denoise_process(anc_denoise_t *d, const float *in, const float *ref, fl
         int take = ANC_DN_HOP - d->n_in;
         if (take > d->block - k) take = d->block - k;
         memcpy(d->fifo_in + d->n_in, in + k, sizeof(float) * take);
-        if (d->fifo_in2) memcpy(d->fifo_in2 + d->n_in, ref + k, sizeof(float) * take);
+        if (ref) memcpy(d->fifo_in2 + d->n_in, ref + k, sizeof(float) * take);
         d->n_in += take;
         k += take;
         if (d->n_in == ANC_DN_HOP) {
-            anc_denoise_hop(d, d->fifo_in, d->fifo_in2, d->fifo_out + d->n_out);
+            anc_denoise_hop(d, d->fifo_in, ref ? d->fifo_in2 : NULL, d->fifo_out + d->n_out);
             d->n_out += ANC_DN_HOP;
             d->n_in = 0;
         }
@@ -332,6 +375,13 @@ void anc_denoise_process(anc_denoise_t *d, const float *in, const float *ref, fl
     memcpy(out, d->fifo_out, sizeof(float) * d->block);
     d->n_out -= d->block;
     memmove(d->fifo_out, d->fifo_out + d->block, sizeof(float) * d->n_out);
+}
+
+void anc_denoise_set_rule(anc_denoise_t *d, float alpha, float floor_db)
+{
+    d->rule_alpha = alpha;
+    d->rule_floor = powf(10.0f, floor_db / 20.0f);
+    d->rule_leak = RULE_LEAK_START;
 }
 
 int anc_denoise_latency(const anc_denoise_t *d)

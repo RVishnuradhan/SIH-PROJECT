@@ -44,3 +44,19 @@ def test_streaming_matches_whole_sequence():
         g, state = m(f[:, t:t + 1], state)
         parts.append(g)
     assert torch.allclose(whole, torch.cat(parts, 1), atol=1e-6)
+
+
+def test_level_rule_learns_how_much_voice_reaches_the_outward_mic():
+    # Voice only, almost as loud at the outward mic (as in the team's
+    # fan_voice_close recording). A rule assuming little leak cuts the voice;
+    # once the leak is learned, the voice must pass.
+    from anc.denoiser import level_rule_gains
+    rng = np.random.default_rng(3)
+    s = rng.standard_normal(12 * 16000)            # it learns over ~4 s of talking
+    X1, X2 = stft(s), stft(0.85 * s)
+    talking = np.full((len(X1), N_BANDS), 0.9)
+    G = level_rule_gains(X1, X2, talking)
+    assert G[:5].mean() < 0.5                        # before learning: voice mistaken for noise
+    assert G[-50:].mean() > 0.8                      # after: voice kept
+    quiet = np.full((len(X1), N_BANDS), 0.1)         # network never sure it hears voice:
+    assert level_rule_gains(X1, X2, quiet)[-50:].mean() < 0.5   # nothing learned

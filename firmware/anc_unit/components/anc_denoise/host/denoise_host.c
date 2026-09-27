@@ -1,9 +1,10 @@
 /*
  * PC harness for anc_denoise, used by tests/test_denoiser_c.py.
  *
- *   denoise_host <weights.bin> <block> <n> <in.f32> <out.f32> [ref.f32]
+ *   denoise_host <weights.bin> <block> <n> <in.f32> <out.f32> [ref.f32 [rule_alpha]]
  *
- * ref.f32 is the outward mic, required by two-mic models.
+ * ref.f32 is the outward mic, required by two-mic models and the level rule
+ * (rule_alpha > 0, floor -25 dB).
  * Runs n samples (a multiple of block) through anc_denoise_process and
  * prints "latency=<samples> mem=<bytes>" on stdout.
  */
@@ -27,8 +28,8 @@ static void *slurp(const char *path, size_t *len)
 
 int main(int argc, char **argv)
 {
-    if (argc != 6 && argc != 7) {
-        fprintf(stderr, "usage: denoise_host <weights.bin> <block> <n> <in.f32> <out.f32> [ref.f32]\n");
+    if (argc < 6 || argc > 8) {
+        fprintf(stderr, "usage: denoise_host <weights.bin> <block> <n> <in.f32> <out.f32> [ref.f32 [rule_alpha]]\n");
         return 2;
     }
     size_t blob_len, in_len;
@@ -38,7 +39,7 @@ int main(int argc, char **argv)
     float *in = slurp(argv[4], &in_len);
     if (in_len != (size_t)n * sizeof(float) || n % block) { fprintf(stderr, "bad input length\n"); return 2; }
     float *ref = NULL;
-    if (argc == 7) {
+    if (argc >= 7) {
         size_t ref_len;
         ref = slurp(argv[6], &ref_len);
         if (ref_len != in_len) { fprintf(stderr, "bad ref length\n"); return 2; }
@@ -49,7 +50,8 @@ int main(int argc, char **argv)
     anc_denoise_t *d = malloc(sizeof(*d));
     void *mem = malloc(mem_len);
     if (anc_denoise_init(d, blob, blob_len, block, -30.0f, mem) != 0) { fprintf(stderr, "init failed\n"); return 3; }
-    if (d->mics == 2 && !ref) { fprintf(stderr, "two-mic model needs ref.f32\n"); return 2; }
+    if (argc == 8) anc_denoise_set_rule(d, (float)atof(argv[7]), -25.0f);
+    if ((d->mics == 2 || d->rule_alpha > 0.0f) && !ref) { fprintf(stderr, "needs ref.f32\n"); return 2; }
 
     float *out = malloc(n * sizeof(float));
     for (long k = 0; k < n; k += block) anc_denoise_process(d, in + k, ref ? ref + k : NULL, out + k);

@@ -1,12 +1,13 @@
 /*
- * Firmware v3: two-mic noise canceller followed by the neural noise
+ * Firmware v4: two-mic noise canceller followed by the neural noise
  * suppressor, both running on the device (no network needed).
  *
  * Audio task (core 1), every 10 ms block:
  *   both mics -> level-ratio speech detector -> gated NLMS canceller
  *   (freeze during speech, 150 ms rollback, divergence guard)
- *   -> neural suppressor (anc_denoise, weights in main/denoiser.bin; a two-mic
- *   model also listens to the outward mic) -> speaker.
+ *   -> neural suppressor (anc_denoise, weights in main/denoiser.bin; the
+ *   two-mic model also listens to the outward mic) -> two-mic level rule
+ *   -> speaker.
  *
  * BOOT button cycles the speaker: mute -> raw (primary mic) -> ai (full
  * chain) -> two-mic (canceller only) -> reference mic -> mute. Raw vs ai is
@@ -54,6 +55,12 @@ static const char *MON_NAMES[MON_COUNT] = {"mute", "raw", "ai", "two-mic", "refe
 /* Deepest cut per frequency: -30 dB turns noise well down without the
  * "underwater" sound of cutting it to nothing. Same as anc.denoiser.denoise. */
 #define AI_FLOOR_DB (-30.0f)
+
+/* Two-mic level rule after the network: turn down frequencies about as loud
+ * at the outward mic as at the mouth mic. The team preferred it by ear on the
+ * board's engine recording. 0 turns it off. */
+#define AI_RULE_ALPHA 1.0f
+#define AI_RULE_FLOOR_DB (-25.0f)
 
 /* Weights exported by tools/export_denoiser.py, linked into the app. */
 extern const uint8_t denoiser_bin_start[] asm("_binary_denoiser_bin_start");
@@ -279,9 +286,11 @@ static void init_denoiser(void)
         ESP_LOGE(TAG, "denoiser init failed; running without the AI stage");
         return;
     }
+    anc_denoise_set_rule(&s_dn, AI_RULE_ALPHA, AI_RULE_FLOOR_DB);
     s_dn_ok = true;
-    ESP_LOGI(TAG, "denoiser: %d-mic, %d bands, GRU %d, %u bytes in %s RAM, latency %d samples",
-             s_dn.mics, s_dn.bands, s_dn.hidden, (unsigned)need, internal ? "internal" : "PSRAM",
+    ESP_LOGI(TAG, "denoiser: %d-mic, rule %.1f, %d bands, GRU %d, %u bytes in %s RAM, latency %d samples",
+             s_dn.mics, s_dn.rule_alpha, s_dn.bands, s_dn.hidden, (unsigned)need,
+             internal ? "internal" : "PSRAM",
              anc_denoise_latency(&s_dn));
 }
 

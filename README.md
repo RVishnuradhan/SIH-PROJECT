@@ -132,6 +132,34 @@ One finding from the board: its mics pick up breath puffs and DC drift below
 took that for noise. The suppressor now high-passes its input at 60 Hz, like
 the training data.
 
+### Two-mic AI and level rule (firmware 0.4)
+
+A recording with the engine sound next to mic 2 and the voice at mic 1
+showed why the two-mic canceller gains little indoors: the engine at the two
+mics was barely alike (coherence 0.1-0.45), which caps any linear canceller
+at about 3 dB. Loudness still differs, though: the voice is loud at mic 1
+and faint at mic 2. Two things now use that:
+
+- **Two-mic network**: the same network, fed the band energies of both mics
+  (trained on simulated two-mic rooms, `build_denoise_set.py --mics 2`).
+- **Level rule** after it: per frequency, turn down whatever part of
+  mic 2's level relative to mic 1 is more than the voice's own. How much voice
+  reaches mic 2 is learned while the network is sure someone is talking, so
+  it adapts to where the mics sit.
+
+Known clean voice mixed into the real engine noise recorded by the board
+(voice reaching mic 2 13 dB down, voice as loud as the noise):
+
+| | Noise removed while talking | in pauses | Voice quality |
+|---|---|---|---|
+| One-mic AI | 7.7 dB | 13.8 dB | 11.7 dB |
+| One-mic AI + fixed level rule (preferred by ear) | 14.2 dB | 22.1 dB | 8.5 dB |
+| **Two-mic AI + learned level rule (firmware 0.4)** | 12.2 dB | 19.1 dB | 10.5 dB |
+
+The limit: mic 2 must hear the voice clearly less than mic 1 (in a helmet,
+boom mic at the mouth and mic 2 on the shell). With the voice about equally
+loud at both, any two-mic method turns some of it down.
+
 ### Why the classifier is not in the audio path
 
 The canceller runs on every sample. The classifier looks at 265 ms of audio and
