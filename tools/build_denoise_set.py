@@ -96,7 +96,9 @@ def make_example(seed: int):
     if _rms(s) > 1e-6 and _rms(n) > 1e-6:
         n *= _rms(s) / _rms(n) / 10 ** (rng.uniform(-5, 20) / 20)
     x = s + n
-    g = 10 ** (rng.uniform(-45, -15) / 20) / _rms(x)
+    # Wide level range: the board sees -60 dBFS (far, quiet) to -10 (shouting
+    # into the boom mic); a narrower range made the model level-dependent.
+    g = 10 ** (rng.uniform(-60, -10) / 20) / _rms(x)
     g = min(g, 0.95 / (np.max(np.abs(x)) + 1e-12))
     s, x = s * g, x * g
     X, S = stft(x), stft(s)
