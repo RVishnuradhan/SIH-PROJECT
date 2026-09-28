@@ -52,7 +52,7 @@
 #include "oled.h"
 #include "speaker_level.h"
 
-#define FW_VERSION "0.6.4"
+#define FW_VERSION "0.6.5"
 
 static const char *TAG = "main";
 
@@ -116,9 +116,10 @@ typedef enum { STREAM_MICS, STREAM_CLEANED } stream_t;
 static atomic_int s_monitor = MON_MUTE;
 /* Speaker volume, set from the dashboard: step 0..VOLUME_STEPS-1, each step
  * 6 dB. A small speaker driven too hard rattles and sounds blurred even on
- * a clean tone (0.6.3 test), so the default is 12 dB below full. */
+ * a clean tone: the team's speaker is clean at 1/5 and 2/5 and blurred from
+ * 3/5 up (0.6.4 test tone), so it starts at 2/5, 18 dB below full. */
 #define VOLUME_STEPS 5
-#define VOLUME_DEFAULT 2
+#define VOLUME_DEFAULT 1
 static atomic_int s_volume = VOLUME_DEFAULT;
 static atomic_int s_stream = STREAM_MICS;
 static _Atomic float s_level_primary_db = -200.0f;
