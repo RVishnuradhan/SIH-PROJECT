@@ -23,9 +23,11 @@
 #define PIN_AMP_DIN   GPIO_NUM_17
 #define PIN_AMP_SD    GPIO_NUM_18   /* low = amp shut down */
 
-/* I2C: SSD1306 OLED (used from firmware v2). */
+/* I2C: 1.3" OLED (SH1106), VCC 3V3. For a 0.96" SSD1306 module set the
+ * column offset to 0 (with 2 the picture just sits 2 pixels to the right). */
 #define PIN_OLED_SDA  GPIO_NUM_8
 #define PIN_OLED_SCL  GPIO_NUM_9
+#define OLED_COLUMN_OFFSET 2
 
 /* The DevKit's own BOOT button (GPIO0, to GND with a pull-up on the board),
  * so no extra button is needed. GPIO0 is a strapping pin, which only matters

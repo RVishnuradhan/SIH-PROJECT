@@ -16,6 +16,9 @@
  * chain) -> two-mic (canceller only) -> reference mic -> mute. Raw vs ai is
  * the demo; the reference position is for checking wiring.
  *
+ * OLED (optional, SH1106/SSD1306 on I2C): what the speaker plays, input and
+ * output level, how much is being removed, and whether the AI hears voice.
+ *
  * Native USB port (tools/record.py):
  *   'I' info line with levels, detector state and processing time
  *   'R' record primary + reference (training data)
@@ -41,8 +44,9 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "host_link.h"
+#include "oled.h"
 
-#define FW_VERSION "0.4.2"
+#define FW_VERSION "0.5.0"
 
 static const char *TAG = "main";
 
@@ -272,6 +276,70 @@ static void start_ai(void)
     xTaskCreatePinnedToCore(ai_task, "ai", 4096, NULL, 4, NULL, 0);
 }
 
+/* ---- OLED --------------------------------------------------------------- */
+
+static const char *SCREEN_MODE[MON_COUNT] = {"off", "RAW mic", "AI clean", "2-mic only", "mic 2"};
+
+/* dBFS -> bar fraction: -80 dBFS empty, 0 dBFS full. */
+static float level_bar(float db)
+{
+    return (db + 80.0f) / 80.0f;
+}
+
+/* Core 0, low priority: redraws the screen 4 times a second from the same
+ * numbers the info line reports. Never touches the audio path. */
+static void display_task(void *arg)
+{
+    (void)arg;
+    char line[OLED_COLS + 1];
+    unsigned late_seen = 0;
+    int late_hold = 0;
+    for (;;) {
+        float in_db = atomic_load(&s_level_primary_db);
+        float out_db = atomic_load(&s_level_ai_db);
+        float gain = atomic_load(&s_ai_gain);
+        unsigned late = atomic_load(&s_ai_late);
+        if (late != late_seen) {
+            late_seen = late;
+            late_hold = 8;                      /* show "AI LATE" for 2 s */
+        }
+
+        oled_clear();
+        oled_text(0, 0, "HERTZ HUNTERS  ANC");
+        snprintf(line, sizeof(line), "Out: %-10s%s", SCREEN_MODE[atomic_load(&s_monitor)],
+                 host_link_streaming() ? " REC" : "");
+        oled_text(1, 0, line);
+        snprintf(line, sizeof(line), "Noisy in  %4.0f dB", in_db < -99 ? -99.0f : in_db);
+        oled_text(2, 0, line);
+        oled_bar(3, 0, 127, level_bar(in_db));
+        snprintf(line, sizeof(line), "Clean out %4.0f dB", out_db < -99 ? -99.0f : out_db);
+        oled_text(4, 0, line);
+        oled_bar(5, 0, 127, level_bar(out_db));
+        float removed = in_db - out_db;
+        snprintf(line, sizeof(line), "Removed   %4.0f dB", removed < 0 ? 0.0f : removed > 99 ? 99.0f : removed);
+        oled_text(6, 0, line);
+        const char *status = !s_dn_ok ? "AI: off (no model)"
+                           : late_hold > 0 ? "AI: LATE"
+                           : gain > 0.35f ? "AI: voice passing"
+                           : "AI: noise cut";
+        if (late_hold > 0) late_hold--;
+        oled_text(7, 0, status);
+        oled_flush();
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
+static void start_display(void)
+{
+    if (oled_init() != ESP_OK) return;      /* no screen: run without it */
+    oled_clear();
+    oled_text(1, 0, "HERTZ HUNTERS");
+    oled_text(3, 0, "AI noise cancelling");
+    oled_text(5, 0, "firmware " FW_VERSION);
+    oled_flush();
+    xTaskCreatePinnedToCore(display_task, "oled", 3072, NULL, 2, NULL, 0);
+}
+
 static void apply_amp_state(void)
 {
     /* The speaker stays off while recording, so it can never leak into the
@@ -388,6 +456,7 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_io_init());
     ESP_ERROR_CHECK(host_link_init());
     init_button();
+    start_display();
 
     /* Core 1, high priority: nothing else runs there, so capture never waits
      * on USB, WiFi or the display. */

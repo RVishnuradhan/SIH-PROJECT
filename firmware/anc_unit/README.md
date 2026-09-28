@@ -32,10 +32,10 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.4.2`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.5.0`, a `canceller:` line and
 a `denoiser:` line.
 
-## Bring-up checklist (firmware 0.4)
+## Bring-up checklist (firmware 0.5)
 
 The board runs the two-mic noise canceller and then the neural noise
 suppressor (the AI), both on the chip itself: no WiFi or internet is used.
@@ -43,7 +43,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.4.2`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.5.0`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -84,6 +84,15 @@ canceller and the AI together took for a 10 ms block (it must stay well
 under 10 000 us). `ai_gain` is how far the AI is turning the sound down
 (1 = not at all); the info line also has `ai_us_max`, the AI's share of
 the time.
+
+## OLED screen (firmware 0.5)
+
+Wire the 4-pin I2C OLED: **VCC -> 3V3, GND -> GND, SDA -> GPIO 8, SCL -> GPIO 9**.
+It shows what the speaker plays, the noisy input level, the cleaned output
+level, how many dB are being removed, and whether the AI hears voice. The UART
+log says `oled: display found at 0x3C` at start-up, or `no display ...` (the
+firmware runs the same without one). A 0.96" SSD1306 module works too; set
+`OLED_COLUMN_OFFSET` to 0 in `main/board.h` if the picture sits 2 pixels right.
 
 ## Updating the AI
 
