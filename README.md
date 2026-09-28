@@ -156,6 +156,13 @@ Known clean voice mixed into the real engine noise recorded by the board
 | One-mic AI + fixed level rule (preferred by ear) | 14.2 dB | 22.1 dB | 8.5 dB |
 | **Two-mic AI + learned level rule (firmware 0.4)** | 12.2 dB | 19.1 dB | 10.5 dB |
 
+On the board itself (firmware 0.4.2, recording made with `record.py
+--cleaned`, gunfire video played next to mic 2, lab fan running): the AI
+runs on core 0 in up to 10.3 ms per 10 ms block with no missed blocks, and
+core 1 needs 1-2 ms. Between words the noise dropped from about -33 dBFS to
+-50 to -80 dBFS; while talking the level changed by under 2 dB. Total delay
+from mic to output is 35 ms.
+
 The limit: mic 2 must hear the voice clearly less than mic 1 (in a helmet,
 boom mic at the mouth and mic 2 on the shell). With the voice about equally
 loud at both, any two-mic method turns some of it down.
