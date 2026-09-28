@@ -29,27 +29,46 @@ static esp_err_t send_cmds(const uint8_t *cmds, size_t n)
     return i2c_master_transmit(s_dev, buf, n + 1, TIMEOUT_MS);
 }
 
-esp_err_t oled_init(void)
+/* Look for a display on one pin assignment; returns its address or 0.
+ * Also logs every I2C device that answers, to tell wiring faults apart
+ * (nothing at all: power or pins; something else: a different chip). */
+static uint16_t find_display(int sda, int scl)
 {
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = I2C_NUM_0,
-        .sda_io_num = PIN_OLED_SDA,
-        .scl_io_num = PIN_OLED_SCL,
+        .sda_io_num = sda,
+        .scl_io_num = scl,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,   /* modules usually have their own too */
     };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_bus), TAG, "i2c bus");
-
-    uint16_t addr = 0;
-    for (uint16_t a = 0x3C; a <= 0x3D; a++) {
-        if (i2c_master_probe(s_bus, a, TIMEOUT_MS) == ESP_OK) {
-            addr = a;
-            break;
+    if (i2c_new_master_bus(&bus_cfg, &s_bus) != ESP_OK) return 0;
+    uint16_t found = 0;
+    for (uint16_t a = 0x08; a < 0x78; a++) {
+        if (i2c_master_probe(s_bus, a, 10) == ESP_OK) {   /* short: 2 x 112 probes at boot */
+            ESP_LOGI(TAG, "I2C device at 0x%02X (SDA=GPIO%d, SCL=GPIO%d)", a, sda, scl);
+            if ((a == 0x3C || a == 0x3D) && !found) found = a;
         }
     }
+    if (!found) {
+        i2c_del_master_bus(s_bus);
+        s_bus = NULL;
+    }
+    return found;
+}
+
+esp_err_t oled_init(void)
+{
+    /* Try the documented wiring, then SDA and SCL swapped: the labels on
+     * these modules are easy to mix up, and trying both costs nothing. */
+    uint16_t addr = find_display(PIN_OLED_SDA, PIN_OLED_SCL);
     if (!addr) {
-        ESP_LOGW(TAG, "no display at 0x3C/0x3D (check SDA=GPIO%d, SCL=GPIO%d, VCC, GND)",
+        addr = find_display(PIN_OLED_SCL, PIN_OLED_SDA);
+        if (addr) ESP_LOGW(TAG, "display answers with SDA and SCL swapped; using it that way");
+    }
+    if (!addr) {
+        ESP_LOGW(TAG, "no display at 0x3C/0x3D on GPIO%d/GPIO%d either way round "
+                 "(check VCC->3V3 and GND: on many 1.3\" modules the pin order is GND, VCC, SCL, SDA)",
                  PIN_OLED_SDA, PIN_OLED_SCL);
         return ESP_ERR_NOT_FOUND;
     }
