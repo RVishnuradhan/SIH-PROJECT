@@ -59,6 +59,6 @@ int main(int argc, char **argv)
     FILE *f = fopen(argv[5], "wb");
     fwrite(out, sizeof(float), n, f);
     fclose(f);
-    printf("latency=%d mem=%zu\n", anc_denoise_latency(d), mem_len);
+    printf("latency=%d mem=%zu state=%zu\n", anc_denoise_latency(d), mem_len, sizeof(anc_denoise_t));
     return 0;
 }

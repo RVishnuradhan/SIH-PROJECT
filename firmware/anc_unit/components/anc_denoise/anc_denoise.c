@@ -137,6 +137,17 @@ static bool walk(walker_t *w, anc_denoise_t *d, int block)
     d->fifo_in = reserve(w, sizeof(float) * ANC_DN_HOP);
     d->fifo_in2 = reserve(w, sizeof(float) * ANC_DN_HOP);
     d->fifo_out = reserve(w, sizeof(float) * (block + 2 * ANC_DN_HOP));
+    d->frame = reserve(w, sizeof(float) * ANC_DN_FRAME);
+    d->frame2 = reserve(w, sizeof(float) * ANC_DN_FRAME);
+    d->overlap = reserve(w, sizeof(float) * ANC_DN_HOP);
+    d->re = reserve(w, sizeof(float) * ANC_DN_FRAME);
+    d->im = reserve(w, sizeof(float) * ANC_DN_FRAME);
+    d->win = reserve(w, sizeof(float) * ANC_DN_FRAME);
+    d->cos_tab = reserve(w, sizeof(float) * ANC_DN_FRAME / 2);
+    d->sin_tab = reserve(w, sizeof(float) * ANC_DN_FRAME / 2);
+    d->rule_sp = reserve(w, sizeof(float) * ANC_DN_BINS);
+    d->rule_sr = reserve(w, sizeof(float) * ANC_DN_BINS);
+    d->bitrev = reserve(w, ANC_DN_FRAME);
     return true;
 }
 
@@ -155,6 +166,11 @@ int anc_denoise_init(anc_denoise_t *d, const void *blob, size_t len, int block,
     if (!walk(&w, d, block)) return -1;
     memset(d->h1, 0, sizeof(float) * d->hidden);
     memset(d->h2, 0, sizeof(float) * d->hidden);
+    memset(d->frame, 0, sizeof(float) * ANC_DN_FRAME);
+    memset(d->frame2, 0, sizeof(float) * ANC_DN_FRAME);
+    memset(d->overlap, 0, sizeof(float) * ANC_DN_HOP);
+    memset(d->rule_sp, 0, sizeof(float) * ANC_DN_BINS);
+    memset(d->rule_sr, 0, sizeof(float) * ANC_DN_BINS);
     for (int b = 0; b < d->bands; b++) d->gains[b] = 1.0f;
 
     d->floor_gain = powf(10.0f, floor_db / 20.0f);

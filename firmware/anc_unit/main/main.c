@@ -42,7 +42,7 @@
 #include "freertos/task.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.4.1"
+#define FW_VERSION "0.4.2"
 
 static const char *TAG = "main";
 

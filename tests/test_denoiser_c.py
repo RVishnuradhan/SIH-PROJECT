@@ -139,3 +139,15 @@ def test_c_matches_python_while_learning_the_voice_leak(host, tmp_path):
     m = min((1 + (len(x) + HOP - 256) // HOP) * HOP, len(x) - pad)
     err = c[pad:pad + m] - ref[:m]
     assert 10 * np.log10(np.sum(ref[:m] ** 2) / np.sum(err ** 2)) > 80
+
+
+def test_state_struct_is_small_enough_for_a_task_stack(host, model, tmp_path):
+    # anc_denoise_mem_size builds an anc_denoise_t on the caller's stack. With
+    # its buffers inside (~8 KB) it overflowed the 3.5 KB main task stack and
+    # crashed firmware 0.4.1 at boot; the buffers now live in caller memory.
+    (tmp_path / "w.bin").write_bytes(export_blob(model))
+    np.zeros(160, np.float32).tofile(tmp_path / "in.f32")
+    r = subprocess.run([str(host), str(tmp_path / "w.bin"), "160", "160", str(tmp_path / "in.f32"),
+                        str(tmp_path / "out.f32")], capture_output=True, text=True, check=True)
+    fields = dict(kv.split("=") for kv in r.stdout.split())
+    assert int(fields["state"]) < 512

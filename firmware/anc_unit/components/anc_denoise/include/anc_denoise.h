@@ -14,7 +14,10 @@
  * against the Python network sample for sample.
  *
  * Memory is supplied by the caller (see anc_denoise_mem_size); init copies
- * the weights into it, so the firmware can keep them in internal RAM.
+ * the weights into it and keeps all buffers there, so the firmware can put
+ * everything in internal RAM. The struct itself stays small (a few hundred
+ * bytes): anc_denoise_mem_size builds one on the stack, and firmware 0.4.1
+ * overflowed the 3.5 KB main task stack when the buffers lived inside it.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -42,17 +45,17 @@ typedef struct {
     float floor_gain;                /* smallest per-bin gain (-30 dB = 0.0316) */
     float rule_alpha, rule_floor;    /* level rule; alpha 0 = off */
     float rule_leak;                 /* learned outward/mouth power ratio of the voice */
-    float rule_sp[ANC_DN_BINS], rule_sr[ANC_DN_BINS];   /* smoothed mouth / outward mic power */
+    float *rule_sp, *rule_sr;        /* [bins] smoothed mouth / outward mic power */
     float *h1, *h2;                  /* GRU states [hidden] */
     float *scratch;                  /* layer outputs */
     float *gains;                    /* last band gains [bands] */
-    float frame[ANC_DN_FRAME];       /* newest 256 input samples */
-    float frame2[ANC_DN_FRAME];      /* ... of the outward mic */
-    float overlap[ANC_DN_HOP];       /* second half of the previous output frame */
-    float re[ANC_DN_FRAME], im[ANC_DN_FRAME];
-    float win[ANC_DN_FRAME];
-    float cos_tab[ANC_DN_FRAME / 2], sin_tab[ANC_DN_FRAME / 2];
-    uint8_t bitrev[ANC_DN_FRAME];
+    float *frame;                    /* [frame] newest 256 input samples */
+    float *frame2;                   /* [frame] ... of the outward mic */
+    float *overlap;                  /* [hop] second half of the previous output frame */
+    float *re, *im;                  /* [frame] FFT work */
+    float *win;                      /* [frame] sqrt-Hann */
+    float *cos_tab, *sin_tab;        /* [frame / 2] */
+    uint8_t *bitrev;                 /* [frame] */
 
     /* Block adapter: any block size in, the same size out, fixed latency. */
     int block;
