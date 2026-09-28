@@ -18,6 +18,7 @@ static const char *TAG = "oled";
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
 static bool s_present;
+static int s_sda = -1, s_scl = -1;     /* where the display was found */
 static uint8_t s_fb[PAGES][WIDTH];
 
 static esp_err_t send_cmds(const uint8_t *cmds, size_t n)
@@ -29,10 +30,13 @@ static esp_err_t send_cmds(const uint8_t *cmds, size_t n)
     return i2c_master_transmit(s_dev, buf, n + 1, TIMEOUT_MS);
 }
 
-/* Look for a display on one pin assignment; returns its address or 0.
- * Also logs every I2C device that answers, to tell wiring faults apart
- * (nothing at all: power or pins; something else: a different chip). */
-static uint16_t find_display(int sda, int scl)
+/* GPIOs free on this board: not the mics or amp (4-6, 15-18), the BOOT
+ * button (0), strapping pins (3, 45, 46), USB (19, 20), the console UART
+ * (43, 44) or the octal PSRAM (33-37). */
+static const int FREE_PINS[] = {8, 9, 1, 2, 10, 11, 12, 13, 14, 21, 38, 39, 40, 41, 42, 47, 48};
+
+/* Is there a display on this pin pair? Quick: only the two OLED addresses. */
+static uint16_t probe_pair(int sda, int scl)
 {
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = I2C_NUM_0,
@@ -40,38 +44,49 @@ static uint16_t find_display(int sda, int scl)
         .scl_io_num = scl,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,   /* modules usually have their own too */
+        .flags.enable_internal_pullup = true,
     };
     if (i2c_new_master_bus(&bus_cfg, &s_bus) != ESP_OK) return 0;
-    uint16_t found = 0;
-    for (uint16_t a = 0x08; a < 0x78; a++) {
-        if (i2c_master_probe(s_bus, a, 10) == ESP_OK) {   /* short: 2 x 112 probes at boot */
-            ESP_LOGI(TAG, "I2C device at 0x%02X (SDA=GPIO%d, SCL=GPIO%d)", a, sda, scl);
-            if ((a == 0x3C || a == 0x3D) && !found) found = a;
-        }
+    for (uint16_t a = 0x3C; a <= 0x3D; a++) {
+        if (i2c_master_probe(s_bus, a, 10) == ESP_OK) return a;   /* keep the bus */
     }
-    if (!found) {
-        i2c_del_master_bus(s_bus);
-        s_bus = NULL;
-    }
-    return found;
+    i2c_del_master_bus(s_bus);
+    s_bus = NULL;
+    return 0;
 }
 
 esp_err_t oled_init(void)
 {
-    /* Try the documented wiring, then SDA and SCL swapped: the labels on
-     * these modules are easy to mix up, and trying both costs nothing. */
-    uint16_t addr = find_display(PIN_OLED_SDA, PIN_OLED_SCL);
+    /* The documented wiring first, then SDA/SCL swapped, then every other
+     * pair of free pins: jumper wires on a breadboard end up one hole off,
+     * and finding the display wherever it is beats a dark screen. */
+    int sda = PIN_OLED_SDA, scl = PIN_OLED_SCL;
+    uint16_t addr = probe_pair(sda, scl);
     if (!addr) {
-        addr = find_display(PIN_OLED_SCL, PIN_OLED_SDA);
-        if (addr) ESP_LOGW(TAG, "display answers with SDA and SCL swapped; using it that way");
+        sda = PIN_OLED_SCL;
+        scl = PIN_OLED_SDA;
+        addr = probe_pair(sda, scl);
+    }
+    const int n = sizeof(FREE_PINS) / sizeof(FREE_PINS[0]);
+    for (int i = 0; i < n && !addr; i++) {
+        for (int j = 0; j < n && !addr; j++) {
+            if (i == j) continue;
+            sda = FREE_PINS[i];
+            scl = FREE_PINS[j];
+            addr = probe_pair(sda, scl);
+        }
     }
     if (!addr) {
-        ESP_LOGW(TAG, "no display at 0x3C/0x3D on GPIO%d/GPIO%d either way round "
-                 "(check VCC->3V3 and GND: on many 1.3\" modules the pin order is GND, VCC, SCL, SDA)",
-                 PIN_OLED_SDA, PIN_OLED_SCL);
+        ESP_LOGW(TAG, "no display found on any free pin pair: check VDD/VCC -> 3V3 and GND "
+                 "(on many 1.3\" modules the pin order is GND, VCC, SCL, SDA)");
         return ESP_ERR_NOT_FOUND;
     }
+    if (sda != PIN_OLED_SDA || scl != PIN_OLED_SCL) {
+        ESP_LOGW(TAG, "display found with SDA on GPIO%d and SCL on GPIO%d (expected %d/%d); using that",
+                 sda, scl, PIN_OLED_SDA, PIN_OLED_SCL);
+    }
+    s_sda = sda;
+    s_scl = scl;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = addr,
@@ -104,7 +119,7 @@ esp_err_t oled_init(void)
     oled_flush();
     static const uint8_t on[] = {0xAF};
     ESP_RETURN_ON_ERROR(send_cmds(on, 1), TAG, "display on");
-    ESP_LOGI(TAG, "display found at 0x%02X", addr);
+    ESP_LOGI(TAG, "display found at 0x%02X (SDA=GPIO%d, SCL=GPIO%d)", addr, s_sda, s_scl);
     return ESP_OK;
 }
 

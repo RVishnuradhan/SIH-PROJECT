@@ -46,7 +46,7 @@
 #include "host_link.h"
 #include "oled.h"
 
-#define FW_VERSION "0.5.1"
+#define FW_VERSION "0.5.2"
 
 static const char *TAG = "main";
 
@@ -291,6 +291,19 @@ static float level_bar(float db)
 static void display_task(void *arg)
 {
     (void)arg;
+    /* Finding the display can take a few seconds when it is not on the
+     * documented pins (the driver searches), so it happens here, off the
+     * start-up path: audio runs from the first moment either way. */
+    if (oled_init() != ESP_OK) {
+        vTaskDelete(NULL);                  /* no screen: run without it */
+    }
+    oled_clear();
+    oled_text(1, 0, "HERTZ HUNTERS");
+    oled_text(3, 0, "AI noise cancelling");
+    oled_text(5, 0, "firmware " FW_VERSION);
+    oled_flush();
+    vTaskDelay(pdMS_TO_TICKS(1500));
+
     char line[OLED_COLS + 1];
     unsigned late_seen = 0;
     int late_hold = 0;
@@ -331,12 +344,6 @@ static void display_task(void *arg)
 
 static void start_display(void)
 {
-    if (oled_init() != ESP_OK) return;      /* no screen: run without it */
-    oled_clear();
-    oled_text(1, 0, "HERTZ HUNTERS");
-    oled_text(3, 0, "AI noise cancelling");
-    oled_text(5, 0, "firmware " FW_VERSION);
-    oled_flush();
     xTaskCreatePinnedToCore(display_task, "oled", 3072, NULL, 2, NULL, 0);
 }
 

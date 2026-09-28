@@ -32,7 +32,7 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.5.1`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.5.2`, a `canceller:` line and
 a `denoiser:` line.
 
 ## Bring-up checklist (firmware 0.5)
@@ -43,7 +43,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.5.1`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.5.2`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -88,7 +88,9 @@ the time.
 ## OLED screen (firmware 0.5)
 
 Wire the 4-pin I2C OLED: **VCC -> 3V3, GND -> GND, SDA -> GPIO 8, SCL -> GPIO 9**.
-It shows what the speaker plays, the noisy input level, the cleaned output
+If the display is not on GPIO 8/9 the firmware searches every free pin pair
+for it (a few seconds, in the background) and logs where it found it, e.g.
+`display found with SDA on GPIO9 and SCL on GPIO14`. It shows what the speaker plays, the noisy input level, the cleaned output
 level, how many dB are being removed, and whether the AI hears voice. The UART
 log says `oled: display found at 0x3C` at start-up, or `no display ...` (the
 firmware runs the same without one). A 0.96" SSD1306 module works too; set
