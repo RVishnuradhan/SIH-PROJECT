@@ -3,9 +3,11 @@
 #include <string.h>
 
 #include "board.h"
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "font5x7.h"
 
 static const char *TAG = "oled";
@@ -56,6 +58,21 @@ static uint16_t probe_pair(int sda, int scl)
     return 0;
 }
 
+/* With the ESP32's weak pull-downs on, a line reads high only if something
+ * outside drives or pulls it up: OLED modules carry pull-up resistors to
+ * their own supply, so "high" means the module is powered and this wire
+ * reaches it; "low" means no power on the module or no contact. */
+static int line_with_pulldown(int pin)
+{
+    gpio_reset_pin(pin);
+    gpio_set_direction(pin, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(pin, GPIO_PULLDOWN_ONLY);
+    esp_rom_delay_us(200);
+    int level = gpio_get_level(pin);
+    gpio_reset_pin(pin);
+    return level;
+}
+
 esp_err_t oled_init(void)
 {
     /* The documented wiring first, then SDA/SCL swapped, then every other
@@ -78,8 +95,19 @@ esp_err_t oled_init(void)
         }
     }
     if (!addr) {
-        ESP_LOGW(TAG, "no display found on any free pin pair: check VDD/VCC -> 3V3 and GND "
-                 "(on many 1.3\" modules the pin order is GND, VCC, SCL, SDA)");
+        int sda_hi = line_with_pulldown(PIN_OLED_SDA), scl_hi = line_with_pulldown(PIN_OLED_SCL);
+        ESP_LOGW(TAG, "no display found on any free pin pair");
+        ESP_LOGW(TAG, "wire test on GPIO%d/GPIO%d with pull-downs: SDA=%s SCL=%s", PIN_OLED_SDA,
+                 PIN_OLED_SCL, sda_hi ? "HIGH" : "low", scl_hi ? "HIGH" : "low");
+        if (!sda_hi && !scl_hi) {
+            ESP_LOGW(TAG, "-> neither line is pulled up: the module has no power (VDD -> 3V3, "
+                     "GND -> GND) or these wires do not reach it (breadboard contact)");
+        } else if (sda_hi != scl_hi) {
+            ESP_LOGW(TAG, "-> only one line is pulled up: the other wire does not make contact");
+        } else {
+            ESP_LOGW(TAG, "-> module powered and wired, but not answering: SPI-only module, "
+                     "or a faulty display");
+        }
         return ESP_ERR_NOT_FOUND;
     }
     if (sda != PIN_OLED_SDA || scl != PIN_OLED_SCL) {
