@@ -12,6 +12,24 @@
 
 static const char *TAG = "audio_io";
 
+/* Gaps: the mic DMA overwrote a block nobody read (mic sound lost), or the
+ * speaker DMA ran out of blocks and played silence (a click in the speaker). */
+static volatile uint32_t s_mic_lost, s_speaker_gaps;
+
+static IRAM_ATTR bool on_mic_overflow(i2s_chan_handle_t h, i2s_event_data_t *e, void *ctx)
+{
+    (void)h; (void)e; (void)ctx;
+    s_mic_lost++;
+    return false;
+}
+
+static IRAM_ATTR bool on_speaker_underrun(i2s_chan_handle_t h, i2s_event_data_t *e, void *ctx)
+{
+    (void)h; (void)e; (void)ctx;
+    s_speaker_gaps++;
+    return false;
+}
+
 static i2s_chan_handle_t s_rx;
 static i2s_chan_handle_t s_tx;
 static int32_t s_rx_buf[AUDIO_BLOCK_FRAMES * 2];
@@ -42,6 +60,8 @@ static esp_err_t init_mics(void)
         },
     };
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_rx, &cfg), TAG, "mic std mode");
+    const i2s_event_callbacks_t cb = {.on_recv_q_ovf = on_mic_overflow};
+    ESP_RETURN_ON_ERROR(i2s_channel_register_event_callback(s_rx, &cb, NULL), TAG, "mic callback");
     return i2s_channel_enable(s_rx);
 }
 
@@ -67,6 +87,8 @@ static esp_err_t init_amp(void)
         },
     };
     ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(s_tx, &cfg), TAG, "amp std mode");
+    const i2s_event_callbacks_t cb = {.on_send_q_ovf = on_speaker_underrun};
+    ESP_RETURN_ON_ERROR(i2s_channel_register_event_callback(s_tx, &cb, NULL), TAG, "amp callback");
 
     /* Preload silence so the first real block does not underrun. */
     memset(s_tx_buf, 0, sizeof(s_tx_buf));
@@ -120,6 +142,18 @@ esp_err_t audio_io_write_mono(const int16_t *samples, size_t frames)
     size_t written = 0;
     return i2s_channel_write(s_tx, s_tx_buf, frames * 2 * sizeof(int16_t), &written,
                              portMAX_DELAY);
+}
+
+void audio_io_gaps(uint32_t *mic_lost, uint32_t *speaker_gaps)
+{
+    *mic_lost = s_mic_lost;
+    *speaker_gaps = s_speaker_gaps;
+}
+
+void audio_io_reset_gaps(void)
+{
+    s_mic_lost = 0;
+    s_speaker_gaps = 0;
 }
 
 void audio_io_amp_enable(bool on)

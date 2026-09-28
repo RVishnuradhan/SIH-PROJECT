@@ -52,7 +52,7 @@
 #include "oled.h"
 #include "speaker_level.h"
 
-#define FW_VERSION "0.6.2"
+#define FW_VERSION "0.6.3"
 
 static const char *TAG = "main";
 
@@ -63,11 +63,22 @@ static const char *TAG = "main";
 #define SPEAKER_CEILING 0.5f
 #define SPEAKER_RELEASE_S 0.3f
 
+/* Speaker test ("tone"): clean notes straight to the amp, no mic involved.
+ * If these sound blurred too, the fault is the amp, speaker, wiring or power,
+ * not the audio processing. A-major arpeggio, 0.4 s per note, -10 dBFS. */
+#define TONE_LEVEL 0.3f
+#define TONE_NOTE_SAMPLES (AUDIO_SAMPLE_RATE * 2 / 5)
+static const float TONE_HZ[] = {440.0f, 554.37f, 659.25f, 880.0f};
+
+/* Speaker/mic gap counters are reset after this many blocks (1 s), so the
+ * start-up hiccups (before the audio task first writes) do not count. */
+#define GAP_RESET_BLOCKS 100
+
 /* Levels are averaged over this many blocks (0.5 s) before publishing. */
 #define LEVEL_BLOCKS 50
 
-typedef enum { MON_MUTE, MON_RAW, MON_AI, MON_TWOMIC, MON_REFERENCE, MON_COUNT } monitor_t;
-static const char *MON_NAMES[MON_COUNT] = {"mute", "raw", "ai", "two-mic", "reference"};
+typedef enum { MON_MUTE, MON_RAW, MON_AI, MON_TWOMIC, MON_REFERENCE, MON_TONE, MON_COUNT } monitor_t;
+static const char *MON_NAMES[MON_COUNT] = {"mute", "raw", "ai", "two-mic", "reference", "tone"};
 
 /* Deepest cut per frequency: -30 dB turns noise well down without the
  * "underwater" sound of cutting it to nothing. Same as anc.denoiser.denoise. */
@@ -163,6 +174,8 @@ static void audio_task(void *arg)
     int acc_blocks = 0;
     uint32_t proc_max = 0;
     static speaker_level_t speaker;
+    float tone_phase = 0.0f;
+    uint32_t tone_n = 0, blocks = 0;
     speaker_level_init(&speaker, SPEAKER_GAIN_MAX, SPEAKER_CEILING, SPEAKER_RELEASE_S,
                        AUDIO_SAMPLE_RATE);
 
@@ -241,10 +254,22 @@ static void audio_task(void *arg)
         monitor_t mon = atomic_load(&s_monitor);
         const float *src = mon == MON_RAW ? p : mon == MON_AI ? final
                          : mon == MON_TWOMIC ? clean : mon == MON_REFERENCE ? r : NULL;
-        for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) {
-            out[i] = src ? to_monitor_sample(speaker_level_step(&speaker, src[i])) : 0;
+        if (mon == MON_TONE) {
+            for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++, tone_n++) {
+                float hz = TONE_HZ[(tone_n / TONE_NOTE_SAMPLES) % 4];
+                tone_phase += 2.0f * (float)M_PI * hz / AUDIO_SAMPLE_RATE;
+                if (tone_phase > 2.0f * (float)M_PI) tone_phase -= 2.0f * (float)M_PI;
+                out[i] = to_monitor_sample(TONE_LEVEL * sinf(tone_phase));
+            }
+        } else {
+            for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) {
+                out[i] = src ? to_monitor_sample(speaker_level_step(&speaker, src[i])) : 0;
+            }
         }
         audio_io_write_mono(out, AUDIO_BLOCK_FRAMES);
+        if (++blocks == GAP_RESET_BLOCKS) {
+            audio_io_reset_gaps();
+        }
     }
 }
 
@@ -290,7 +315,7 @@ static void start_ai(void)
 
 /* ---- OLED --------------------------------------------------------------- */
 
-static const char *SCREEN_MODE[MON_COUNT] = {"off", "RAW mic", "AI clean", "2-mic only", "mic 2"};
+static const char *SCREEN_MODE[MON_COUNT] = {"off", "RAW mic", "AI clean", "2-mic only", "mic 2", "test tone"};
 
 /* dBFS -> bar fraction: -80 dBFS empty, 0 dBFS full. */
 static float level_bar(float db)
@@ -374,6 +399,8 @@ void dashboard_status_json(char *buf, size_t len)
     static unsigned last_late;
     static int64_t last_late_us = -10000000;
     unsigned late = atomic_load(&s_ai_late);
+    uint32_t mic_lost, spk_gaps;
+    audio_io_gaps(&mic_lost, &spk_gaps);
     int64_t now = esp_timer_get_time();
     if (late != last_late) {
         last_late = late;
@@ -382,13 +409,14 @@ void dashboard_status_json(char *buf, size_t len)
     snprintf(buf, len,
              "{\"fw\":\"%s\",\"mode\":\"%s\",\"in\":%.1f,\"out\":%.1f,\"ref\":%.1f,"
              "\"ai\":%d,\"gain\":%.2f,\"speech\":%d,\"ai_us\":%u,\"late\":%u,"
-             "\"late_recent\":%d,\"proc_us\":%u,\"delay_ms\":%.1f,\"rec\":%d,\"uptime_s\":%lld}",
+             "\"late_recent\":%d,\"proc_us\":%u,\"delay_ms\":%.1f,\"rec\":%d,\"uptime_s\":%lld,"
+             "\"mic_lost\":%u,\"spk_gaps\":%u}",
              FW_VERSION, MON_NAMES[atomic_load(&s_monitor)], atomic_load(&s_level_primary_db),
              atomic_load(&s_level_ai_db), atomic_load(&s_level_reference_db), (int)s_dn_ok,
              atomic_load(&s_ai_gain), (int)atomic_load(&s_speech), atomic_load(&s_ai_us_max), late,
              (int)(now - last_late_us < 2000000), atomic_load(&s_proc_us_max),
              output_delay() * 1000.0 / AUDIO_SAMPLE_RATE, (int)host_link_streaming(),
-             (long long)(now / 1000000));
+             (long long)(now / 1000000), (unsigned)mic_lost, (unsigned)spk_gaps);
 }
 
 bool dashboard_set_mode(const char *name)

@@ -32,7 +32,7 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.6.2`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.6.3`, a `canceller:` line and
 a `denoiser:` line.
 
 ## Bring-up checklist (firmware 0.6)
@@ -44,7 +44,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.6.2`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.6.3`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -66,7 +66,8 @@ mic is louder than the outward mic".
    | 2 | **ai**: mic 1 after the canceller and the AI (what HQ would hear) |
    | 3 | **two-mic**: mic 1 after the canceller only |
    | 4 | **reference**: mic 2 (wiring check) |
-   | 5 | nothing again |
+   | 5 | **tone**: test notes, no mic (speaker check) |
+   | 6 | nothing again |
 
    If it howls, the speaker is too close. Press until it is quiet.
    The volume is automatic (firmware 0.6.2): quiet sound is boosted up to
@@ -115,6 +116,13 @@ and buttons for what the speaker plays (raw mic / AI clean / 2-mic only /
 mute). The footer shows the firmware version, the delay and how many audio
 blocks the AI dropped (should stay 0). Up to 4 phones can watch at once.
 The UART log says `dashboard: WiFi "HERTZ-HUNTERS-ANC" ...` at start-up.
+
+**Speaker check (firmware 0.6.3):** the **Test tone** button (also the last
+BOOT-button step) plays clean notes straight to the amp, with no mic
+involved. If the notes sound blurred or buzzy too, look at the amp, speaker,
+wiring or 5 V supply, not the audio processing. The footer also counts
+**speaker gaps** (the amp ran out of sound: clicks) and **mic gaps** (mic
+sound lost); both should stay 0.
 WiFi runs on core 1 next to the audio, never on core 0 with the AI (in 0.6.0
 it did, and the AI dropped blocks). An `sdkconfig` made before 0.6.1 still
 has the old setting and the build stops with a message: run

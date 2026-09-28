@@ -35,6 +35,7 @@
   .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; margin-right: 6px; vertical-align: middle; background: currentColor; }
   .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: #1f242d; color: var(--text); }
+  button.wide { grid-column: 1 / -1; }
   button.on { border-color: var(--out); background: rgba(55, 211, 153, .15); color: var(--out); font-weight: 600; }
   .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
 </style>
@@ -78,6 +79,7 @@
       <button data-m="ai">AI clean</button>
       <button data-m="two-mic">2-mic only</button>
       <button data-m="mute">Mute</button>
+      <button data-m="tone" class="wide">Test tone (speaker check)</button>
     </div>
   </section>
 
@@ -135,7 +137,8 @@ function render(d) {
   else { st.textContent = 'Cutting noise'; st.style.color = 'var(--warn)'; }
   document.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === d.mode));
   $('foot').textContent = `firmware ${d.fw} · delay ${Math.round(d.delay_ms)} ms · ` +
-                          `${d.late} dropped blocks` + (d.rec ? ' · recording' : '');
+                          `${d.late} dropped blocks · ${d.spk_gaps} speaker gaps · ` +
+                          `${d.mic_lost} mic gaps` + (d.rec ? ' · recording' : '');
   hist.push({in: d.in, out: d.out});
   if (hist.length > N) hist.shift();
   draw();
