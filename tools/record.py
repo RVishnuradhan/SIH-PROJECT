@@ -41,23 +41,36 @@ def open_port(port: str) -> serial.Serial:
     return ser
 
 
-def query_info(ser: serial.Serial) -> str:
-    ser.reset_input_buffer()
-    ser.write(b"I")
-    deadline = time.time() + 1.0
-    buf = b""
-    while time.time() < deadline:
-        buf += ser.read(512)
-        if b"\n" in buf:
-            for line in buf.split(b"\n"):
-                if line.startswith(b"ANC "):
-                    return line.decode(errors="replace")
-    raise RuntimeError("no reply from device: wrong port, or firmware not flashed?")
+def query_info(ser: serial.Serial, wait: float = 1.0) -> str:
+    deadline = time.time() + wait
+    while True:
+        ser.reset_input_buffer()
+        ser.write(b"I")
+        reply_by = time.time() + 1.0
+        buf = b""
+        while time.time() < reply_by:
+            buf += ser.read(512)
+            if b"\n" in buf:
+                for line in buf.split(b"\n"):
+                    if line.startswith(b"ANC "):
+                        return line.decode(errors="replace")
+        if time.time() >= deadline:
+            raise RuntimeError("no reply from device: wrong port, or firmware not flashed?")
+
+
+def first_contact(ser: serial.Serial) -> str:
+    # Right after the board is plugged in or reset it needs a few seconds
+    # (WiFi start-up since firmware 0.6) before it answers.
+    try:
+        return query_info(ser)
+    except RuntimeError:
+        print("waiting for the board to start (up to 15 s)...")
+        return query_info(ser, wait=15.0)
 
 
 def cmd_levels(args: argparse.Namespace) -> None:
     ser = open_port(args.port)
-    print(query_info(ser))
+    print(first_contact(ser))
     print("\nLevels in dBFS. Talk into one mic at a time; that mic should jump by 20+ dB.")
     print("-200 means all-zero data: check SD, BCLK and WS wiring.\n")
     try:
@@ -95,7 +108,7 @@ def cmd_record(args: argparse.Namespace) -> None:
         sys.exit("give --label, or --play a file that has a .json sidecar with labels")
 
     ser = open_port(args.port)
-    info = query_info(ser)
+    info = first_contact(ser)
     print(info)
     fields = dict(kv.split("=", 1) for kv in info.split()[1:] if "=" in kv)
     # Firmware 0.3+ reports how far the output lags the primary mic; 0.2 had
