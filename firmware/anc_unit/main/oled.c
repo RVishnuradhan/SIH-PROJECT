@@ -32,8 +32,9 @@ static esp_err_t send_cmds(const uint8_t *cmds, size_t n)
 
 /* GPIOs free on this board: not the mics or amp (4-6, 15-18), the BOOT
  * button (0), strapping pins (3, 45, 46), USB (19, 20), the console UART
- * (43, 44) or the octal PSRAM (33-37). */
-static const int FREE_PINS[] = {8, 9, 1, 2, 10, 11, 12, 13, 14, 21, 38, 39, 40, 41, 42, 47, 48};
+ * (43, 44), the octal PSRAM (33-37) or the DevKit's RGB LED (48 on v1.0
+ * boards, 38 on v1.1: I2C probing there lit it up at random). */
+static const int FREE_PINS[] = {8, 9, 1, 2, 10, 11, 12, 13, 14, 21, 39, 40, 41, 42, 47};
 
 /* Is there a display on this pin pair? Quick: only the two OLED addresses. */
 static uint16_t probe_pair(int sda, int scl)

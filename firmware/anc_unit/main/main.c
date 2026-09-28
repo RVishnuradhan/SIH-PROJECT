@@ -46,7 +46,7 @@
 #include "host_link.h"
 #include "oled.h"
 
-#define FW_VERSION "0.5.2"
+#define FW_VERSION "0.5.3"
 
 static const char *TAG = "main";
 

@@ -32,7 +32,7 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.5.2`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.5.3`, a `canceller:` line and
 a `denoiser:` line.
 
 ## Bring-up checklist (firmware 0.5)
@@ -43,7 +43,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.5.2`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.5.3`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
