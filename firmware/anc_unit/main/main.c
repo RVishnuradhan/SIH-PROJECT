@@ -51,7 +51,7 @@
 #include "host_link.h"
 #include "oled.h"
 
-#define FW_VERSION "0.6.0"
+#define FW_VERSION "0.6.1"
 
 static const char *TAG = "main";
 
@@ -514,8 +514,9 @@ void app_main(void)
     init_button();
     start_display();
 
-    /* Core 1, high priority: nothing else runs there, so capture never waits
-     * on USB, WiFi or the display. */
+    /* Core 1, high priority: capture never waits on the AI, USB or the
+     * display. The dashboard's WiFi shares this core; the 60 ms of I2S DMA
+     * buffer covers its short bursts. */
     xTaskCreatePinnedToCore(audio_task, "audio", 8192, NULL, configMAX_PRIORITIES - 2, NULL, 1);
 
     /* Last, so the audio path has its memory before WiFi takes some. */

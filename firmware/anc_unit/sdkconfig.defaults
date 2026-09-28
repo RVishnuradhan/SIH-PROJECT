@@ -19,3 +19,8 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # The canceller runs every sample; build for speed, not for step-through
 # debugging (the default -Og is 2-3x slower on these loops).
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# Phone dashboard: WiFi and the network stack run on core 1 next to the audio
+# task. Core 0 is the AI's, and WiFi there made it drop blocks (0.6.0).
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y

@@ -8,7 +8,21 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
+
+/* Core 0 belongs to the AI, which needs nearly all of every 10 ms block;
+ * on core 0, WiFi (priority 23) and the network stack (18) cost firmware
+ * 0.6.0 dropped blocks. Everything network runs on core 1 instead, next to
+ * the audio task, which uses 1-2 ms per block and has 60 ms of DMA buffer.
+ * sdkconfig is not in git: an sdkconfig made before 0.6.1 still has the old
+ * setting, and `idf.py set-target esp32s3` rebuilds it from sdkconfig.defaults. */
+#if !CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1 || !CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1
+#error "WiFi must run on core 1: run `idf.py set-target esp32s3`, then `idf.py build`"
+#endif
+#define NET_CORE 1
 
 static const char *TAG = "dashboard";
 
@@ -74,14 +88,13 @@ static esp_err_t start_wifi(void)
     return esp_wifi_start();
 }
 
-esp_err_t dashboard_start(void)
+static esp_err_t start_dashboard(void)
 {
     ESP_RETURN_ON_ERROR(start_wifi(), TAG, "wifi");
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    cfg.core_id = 0;
-    /* Below the AI task (4): pages load in the AI's idle time and never
-     * delay a block of audio. */
+    cfg.core_id = NET_CORE;
+    /* Far below the audio task: pages are served in its idle time. */
     cfg.task_priority = 3;
     cfg.stack_size = 6144;
     httpd_handle_t server;
@@ -97,4 +110,19 @@ esp_err_t dashboard_start(void)
     ESP_LOGI(TAG, "WiFi \"%s\" (password %s): open http://192.168.4.1 on a phone",
              DASHBOARD_SSID, DASHBOARD_PASSWORD);
     return ESP_OK;
+}
+
+static void start_task(void *arg)
+{
+    /* The WiFi driver takes its interrupt on the core that starts it. */
+    if (start_dashboard() != ESP_OK) {
+        ESP_LOGW(TAG, "dashboard not started; everything else runs as normal");
+    }
+    vTaskDelete(NULL);
+}
+
+esp_err_t dashboard_start(void)
+{
+    BaseType_t ok = xTaskCreatePinnedToCore(start_task, "dash_start", 4096, NULL, 3, NULL, NET_CORE);
+    return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }

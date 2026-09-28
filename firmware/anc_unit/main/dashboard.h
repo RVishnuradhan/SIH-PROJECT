@@ -15,6 +15,8 @@
 #define DASHBOARD_SSID "HERTZ-HUNTERS-ANC"
 #define DASHBOARD_PASSWORD "hertz1234"
 
+/* Starts WiFi and the web server on core 1 in the background; failures are
+ * logged and leave the rest of the unit running. */
 esp_err_t dashboard_start(void);
 
 /* Implemented by the application (main.c). */
