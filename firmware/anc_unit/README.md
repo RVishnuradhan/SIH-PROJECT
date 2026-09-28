@@ -32,18 +32,19 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.5.3`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.6.0`, a `canceller:` line and
 a `denoiser:` line.
 
-## Bring-up checklist (firmware 0.5)
+## Bring-up checklist (firmware 0.6)
 
 The board runs the two-mic noise canceller and then the neural noise
-suppressor (the AI), both on the chip itself: no WiFi or internet is used.
+suppressor (the AI), both on the chip itself: no internet is used. The board's own WiFi hotspot
+only serves the phone dashboard; the audio never goes over it.
 Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.5.3`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.6.0`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -95,6 +96,21 @@ level, how many dB are being removed, and whether the AI hears voice. The UART
 log says `oled: display found at 0x3C` at start-up, or `no display ...` (the
 firmware runs the same without one). A 0.96" SSD1306 module works too; set
 `OLED_COLUMN_OFFSET` to 0 in `main/board.h` if the picture sits 2 pixels right.
+
+## Phone dashboard (firmware 0.6)
+
+The board opens its own WiFi hotspot; no router or internet is needed.
+
+1. On the phone, join WiFi **HERTZ-HUNTERS-ANC**, password **hertz1234**.
+   If the phone warns "no internet", choose to stay connected.
+2. Open **http://192.168.4.1** in the browser.
+
+The page updates 4 times a second and shows how many dB of noise are removed
+between words, the noisy input and clean output levels, a 60-second chart,
+and buttons for what the speaker plays (raw mic / AI clean / 2-mic only /
+mute). The footer shows the firmware version, the delay and how many audio
+blocks the AI dropped (should stay 0). Up to 4 phones can watch at once.
+The UART log says `dashboard: WiFi "HERTZ-HUNTERS-ANC" ...` at start-up.
 
 ## Updating the AI
 

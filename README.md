@@ -181,7 +181,7 @@ keeps running with its current filter. The audio never drops out.
 | MCU | ESP32-S3-WROOM-1 **N16R8** (16 MB flash, 8 MB octal PSRAM) |
 | Mics | 2x INMP441 on one I2S bus, primary = L, reference = R (sample-locked) |
 | Output | MAX98357A I2S amp + speaker (demo stand-in for the HQ receiver) |
-| Display | 1.3" I2C OLED (SH1106, 4 pins) + dashboard on the board's own WiFi hotspot |
+| Display | 1.3" I2C OLED (SH1106, 4 pins) + phone dashboard on the board's own WiFi hotspot (firmware 0.6: join `HERTZ-HUNTERS-ANC`, open http://192.168.4.1) |
 | Power | USB power bank |
 
 ### Pinout

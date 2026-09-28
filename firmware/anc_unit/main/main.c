@@ -16,6 +16,10 @@
  * chain) -> two-mic (canceller only) -> reference mic -> mute. Raw vs ai is
  * the demo; the reference position is for checking wiring.
  *
+ * Phone dashboard: the unit's own WiFi "HERTZ-HUNTERS-ANC" (password
+ * hertz1234), page at http://192.168.4.1 with live levels, dB removed, a
+ * 60 s chart and buttons for what the speaker plays (dashboard.c).
+ *
  * OLED (optional, SH1106/SSD1306 on I2C): what the speaker plays, input and
  * output level, how much is being removed, and whether the AI hears voice.
  *
@@ -36,6 +40,7 @@
 #include "audio_config.h"
 #include "audio_io.h"
 #include "board.h"
+#include "dashboard.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_psram.h"
@@ -46,7 +51,7 @@
 #include "host_link.h"
 #include "oled.h"
 
-#define FW_VERSION "0.5.3"
+#define FW_VERSION "0.6.0"
 
 static const char *TAG = "main";
 
@@ -347,6 +352,51 @@ static void start_display(void)
     xTaskCreatePinnedToCore(display_task, "oled", 3072, NULL, 2, NULL, 0);
 }
 
+static void apply_amp_state(void);
+
+/* Samples from the mouth mic to the output (canceller + AI + pipeline). */
+static int output_delay(void)
+{
+    return s_anc.cfg.delay +
+           (s_dn_ok ? anc_denoise_latency(&s_dn) + AI_PIPELINE_BLOCKS * AUDIO_BLOCK_FRAMES : 0);
+}
+
+void dashboard_status_json(char *buf, size_t len)
+{
+    /* "late_recent": the AI missed a block in the last 2 s. */
+    static unsigned last_late;
+    static int64_t last_late_us = -10000000;
+    unsigned late = atomic_load(&s_ai_late);
+    int64_t now = esp_timer_get_time();
+    if (late != last_late) {
+        last_late = late;
+        last_late_us = now;
+    }
+    snprintf(buf, len,
+             "{\"fw\":\"%s\",\"mode\":\"%s\",\"in\":%.1f,\"out\":%.1f,\"ref\":%.1f,"
+             "\"ai\":%d,\"gain\":%.2f,\"speech\":%d,\"ai_us\":%u,\"late\":%u,"
+             "\"late_recent\":%d,\"proc_us\":%u,\"delay_ms\":%.1f,\"rec\":%d,\"uptime_s\":%lld}",
+             FW_VERSION, MON_NAMES[atomic_load(&s_monitor)], atomic_load(&s_level_primary_db),
+             atomic_load(&s_level_ai_db), atomic_load(&s_level_reference_db), (int)s_dn_ok,
+             atomic_load(&s_ai_gain), (int)atomic_load(&s_speech), atomic_load(&s_ai_us_max), late,
+             (int)(now - last_late_us < 2000000), atomic_load(&s_proc_us_max),
+             output_delay() * 1000.0 / AUDIO_SAMPLE_RATE, (int)host_link_streaming(),
+             (long long)(now / 1000000));
+}
+
+bool dashboard_set_mode(const char *name)
+{
+    for (int m = 0; m < MON_COUNT; m++) {
+        if (strcmp(name, MON_NAMES[m]) == 0) {
+            atomic_store(&s_monitor, m);
+            apply_amp_state();
+            ESP_LOGI(TAG, "speaker: %s (from dashboard)", MON_NAMES[m]);
+            return true;
+        }
+    }
+    return false;
+}
+
 static void apply_amp_state(void)
 {
     /* The speaker stays off while recording, so it can never leak into the
@@ -360,8 +410,7 @@ static void send_info(void)
     char line[400];
     /* out_delay: samples the 'P' output lags the primary mic by (canceller
      * delay, plus the suppressor's when it runs). */
-    int out_delay = s_anc.cfg.delay +
-                    (s_dn_ok ? anc_denoise_latency(&s_dn) + AI_PIPELINE_BLOCKS * AUDIO_BLOCK_FRAMES : 0);
+    int out_delay = output_delay();
     snprintf(line, sizeof(line),
              "ANC fw=%s fs=%d block=%d psram=%u monitor=%s "
              "lvl_primary=%.1f lvl_reference=%.1f lvl_cleaned=%.1f lvl_ai=%.1f "
@@ -468,6 +517,11 @@ void app_main(void)
     /* Core 1, high priority: nothing else runs there, so capture never waits
      * on USB, WiFi or the display. */
     xTaskCreatePinnedToCore(audio_task, "audio", 8192, NULL, configMAX_PRIORITIES - 2, NULL, 1);
+
+    /* Last, so the audio path has its memory before WiFi takes some. */
+    if (dashboard_start() != ESP_OK) {
+        ESP_LOGW(TAG, "dashboard not started; everything else runs as normal");
+    }
 
     for (;;) {
         switch (host_link_poll_command()) {
