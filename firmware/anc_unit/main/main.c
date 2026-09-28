@@ -5,9 +5,12 @@
  * Audio task (core 1), every 10 ms block:
  *   both mics -> level-ratio speech detector -> gated NLMS canceller
  *   (freeze during speech, 150 ms rollback, divergence guard)
- *   -> neural suppressor (anc_denoise, weights in main/denoiser.bin; the
- *   two-mic model also listens to the outward mic) -> two-mic level rule
- *   -> speaker.
+ *   -> AI task (core 0): neural suppressor (anc_denoise, weights in
+ *   main/denoiser.bin; the two-mic model also listens to the outward mic)
+ *   -> two-mic level rule -> back to the audio task -> speaker.
+ * The AI takes 5-10 ms per block, too much to share core 1 with the
+ * canceller (measured 12 ms per 10 ms block on firmware 0.4.0), so it runs on
+ * the other core, AI_PIPELINE_BLOCKS behind.
  *
  * BOOT button cycles the speaker: mute -> raw (primary mic) -> ai (full
  * chain) -> two-mic (canceller only) -> reference mic -> mute. Raw vs ai is
@@ -35,10 +38,11 @@
 #include "esp_psram.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "host_link.h"
 
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.1"
 
 static const char *TAG = "main";
 
@@ -62,6 +66,23 @@ static const char *MON_NAMES[MON_COUNT] = {"mute", "raw", "ai", "two-mic", "refe
 #define AI_RULE_ALPHA 1.0f
 #define AI_RULE_FLOOR_DB (-25.0f)
 
+/* Blocks the AI output lags the audio task. The AI task needs up to ~10 ms
+ * for a block holding two of its 8 ms frames, so one block of slack is not
+ * always enough; two is. Adds 20 ms of delay (total ~35 ms). */
+#define AI_PIPELINE_BLOCKS 2
+#define AI_QUEUE_DEPTH (AI_PIPELINE_BLOCKS + 3)
+
+typedef struct {
+    float in[AUDIO_BLOCK_FRAMES];     /* canceller output */
+    float ref[AUDIO_BLOCK_FRAMES];    /* outward mic, lined up with it */
+} ai_job_t;
+
+typedef struct {
+    float out[AUDIO_BLOCK_FRAMES];
+} ai_result_t;
+
+static QueueHandle_t s_ai_jobs, s_ai_results;
+
 /* Weights exported by tools/export_denoiser.py, linked into the app. */
 extern const uint8_t denoiser_bin_start[] asm("_binary_denoiser_bin_start");
 extern const uint8_t denoiser_bin_end[] asm("_binary_denoiser_bin_end");
@@ -78,8 +99,9 @@ static _Atomic float s_ai_gain = 1.0f;
 static _Atomic float s_ratio_db = 0.0f;
 static atomic_bool s_speech;
 static atomic_uint s_rollbacks, s_guard_trips;
-static atomic_uint s_proc_us_max;     /* worst processing time per 10 ms block, last 0.5 s */
-static atomic_uint s_ai_us_max;       /* the neural suppressor's share of it */
+static atomic_uint s_proc_us_max;     /* audio task: worst time per 10 ms block, last 0.5 s */
+static atomic_uint s_ai_us_max;       /* AI task: worst time per block, last 0.5 s (core 0) */
+static atomic_uint s_ai_late;         /* blocks the AI did not deliver in time (played silent) */
 
 static anc_canceller_t s_anc;
 static anc_vad_t s_vad;
@@ -122,9 +144,11 @@ static void audio_task(void *arg)
     const int lag = s_anc.cfg.delay;
     static int32_t final24[AUDIO_BLOCK_FRAMES];
     static int16_t out[AUDIO_BLOCK_FRAMES];
+    static ai_job_t job;
+    static ai_result_t result;
     double acc_p = 0, acc_r = 0, acc_c = 0, acc_a = 0;
     int acc_blocks = 0;
-    uint32_t proc_max = 0, ai_max = 0;
+    uint32_t proc_max = 0;
 
     for (;;) {
         if (audio_io_read(primary, reference, AUDIO_BLOCK_FRAMES) != ESP_OK) {
@@ -143,19 +167,32 @@ static void audio_task(void *arg)
             atomic_store(&s_speech, s_vad.speech);
             atomic_store(&s_ratio_db, s_vad.last_ratio_db);
         }
-        int64_t t1 = esp_timer_get_time();
         const float *final = clean;
         if (s_dn_ok) {
             for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) {
                 r_late[i] = i < lag ? r_hist[AUDIO_BLOCK_FRAMES - lag + i] : r[i - lag];
             }
             memcpy(r_hist, r, sizeof(r_hist));
-            anc_denoise_process(&s_dn, clean, r_late, ai);
+            memcpy(job.in, clean, sizeof(job.in));
+            memcpy(job.ref, r_late, sizeof(job.ref));
+            xQueueSend(s_ai_jobs, &job, 0);   /* never full while the AI keeps up */
+
+            /* Take the result from AI_PIPELINE_BLOCKS ago. If the AI fell
+             * behind, play silence for this block and drop any backlog so the
+             * delay stays fixed. */
+            if (xQueueReceive(s_ai_results, &result, 0) == pdTRUE) {
+                while (uxQueueMessagesWaiting(s_ai_results) > AI_PIPELINE_BLOCKS - 1) {
+                    xQueueReceive(s_ai_results, &result, 0);
+                }
+                memcpy(ai, result.out, sizeof(ai));
+            } else {
+                memset(ai, 0, sizeof(ai));
+                atomic_fetch_add(&s_ai_late, 1);
+            }
             final = ai;
         }
-        int64_t t2 = esp_timer_get_time();
-        if ((uint32_t)(t2 - t0) > proc_max) proc_max = (uint32_t)(t2 - t0);
-        if ((uint32_t)(t2 - t1) > ai_max) ai_max = (uint32_t)(t2 - t1);
+        uint32_t dt = (uint32_t)(esp_timer_get_time() - t0);
+        if (dt > proc_max) proc_max = dt;
 
         if (atomic_load(&s_stream) == STREAM_CLEANED) {
             for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) final24[i] = to_s24(final[i]);
@@ -176,14 +213,12 @@ static void audio_task(void *arg)
             atomic_store(&s_level_reference_db, to_dbfs(acc_r, n));
             atomic_store(&s_level_cleaned_db, to_dbfs(acc_c, n));
             atomic_store(&s_level_ai_db, to_dbfs(acc_a, n));
-            atomic_store(&s_ai_gain, s_dn_ok ? anc_denoise_mean_gain(&s_dn) : 1.0f);
             atomic_store(&s_rollbacks, s_anc.rollbacks);
             atomic_store(&s_guard_trips, s_anc.guard_trips);
             atomic_store(&s_proc_us_max, proc_max);
-            atomic_store(&s_ai_us_max, ai_max);
             acc_p = acc_r = acc_c = acc_a = 0;
             acc_blocks = 0;
-            proc_max = ai_max = 0;
+            proc_max = 0;
         }
 
         /* Always write a block, silent or not, so the amp clock never stalls. */
@@ -195,6 +230,46 @@ static void audio_task(void *arg)
         }
         audio_io_write_mono(out, AUDIO_BLOCK_FRAMES);
     }
+}
+
+/* Core 0: runs the neural suppressor on each block the audio task queues. */
+static void ai_task(void *arg)
+{
+    (void)arg;
+    static ai_job_t job;
+    static ai_result_t res;
+    uint32_t worst = 0;
+    int blocks = 0;
+    for (;;) {
+        xQueueReceive(s_ai_jobs, &job, portMAX_DELAY);
+        int64_t t0 = esp_timer_get_time();
+        anc_denoise_process(&s_dn, job.in, job.ref, res.out);
+        uint32_t dt = (uint32_t)(esp_timer_get_time() - t0);
+        if (dt > worst) worst = dt;
+        xQueueSend(s_ai_results, &res, portMAX_DELAY);
+        if (++blocks == LEVEL_BLOCKS) {
+            atomic_store(&s_ai_us_max, worst);
+            atomic_store(&s_ai_gain, anc_denoise_mean_gain(&s_dn));
+            worst = 0;
+            blocks = 0;
+        }
+    }
+}
+
+static void start_ai(void)
+{
+    if (!s_dn_ok) return;
+    s_ai_jobs = xQueueCreate(AI_QUEUE_DEPTH, sizeof(ai_job_t));
+    s_ai_results = xQueueCreate(AI_QUEUE_DEPTH, sizeof(ai_result_t));
+    if (!s_ai_jobs || !s_ai_results) {
+        ESP_LOGE(TAG, "no memory for the AI queues; running without the AI stage");
+        s_dn_ok = false;
+        return;
+    }
+    static const ai_result_t silence;
+    for (int i = 0; i < AI_PIPELINE_BLOCKS; i++) xQueueSend(s_ai_results, &silence, 0);
+    /* Below the USB writer (5) so recordings keep flowing; above app_main. */
+    xTaskCreatePinnedToCore(ai_task, "ai", 4096, NULL, 4, NULL, 0);
 }
 
 static void apply_amp_state(void)
@@ -210,19 +285,21 @@ static void send_info(void)
     char line[400];
     /* out_delay: samples the 'P' output lags the primary mic by (canceller
      * delay, plus the suppressor's when it runs). */
-    int out_delay = s_anc.cfg.delay + (s_dn_ok ? anc_denoise_latency(&s_dn) : 0);
+    int out_delay = s_anc.cfg.delay +
+                    (s_dn_ok ? anc_denoise_latency(&s_dn) + AI_PIPELINE_BLOCKS * AUDIO_BLOCK_FRAMES : 0);
     snprintf(line, sizeof(line),
              "ANC fw=%s fs=%d block=%d psram=%u monitor=%s "
              "lvl_primary=%.1f lvl_reference=%.1f lvl_cleaned=%.1f lvl_ai=%.1f "
              "speech=%d ratio_db=%.1f rollbacks=%u guard_trips=%u proc_us_max=%u "
-             "ai=%d ai_gain=%.2f ai_us_max=%u out_delay=%d\n",
+             "ai=%d ai_gain=%.2f ai_us_max=%u ai_late=%u out_delay=%d\n",
              FW_VERSION, AUDIO_SAMPLE_RATE, AUDIO_BLOCK_FRAMES,
              (unsigned)esp_psram_get_size(), MON_NAMES[atomic_load(&s_monitor)],
              atomic_load(&s_level_primary_db), atomic_load(&s_level_reference_db),
              atomic_load(&s_level_cleaned_db), atomic_load(&s_level_ai_db),
              (int)atomic_load(&s_speech), atomic_load(&s_ratio_db), atomic_load(&s_rollbacks),
              atomic_load(&s_guard_trips), atomic_load(&s_proc_us_max), (int)s_dn_ok,
-             atomic_load(&s_ai_gain), atomic_load(&s_ai_us_max), out_delay);
+             atomic_load(&s_ai_gain), atomic_load(&s_ai_us_max), atomic_load(&s_ai_late),
+             out_delay);
     host_link_send_line(line);
 }
 
@@ -307,6 +384,7 @@ void app_main(void)
     ESP_LOGI(TAG, "ANC unit firmware %s", FW_VERSION);
     init_canceller();
     init_denoiser();
+    start_ai();
     ESP_ERROR_CHECK(audio_io_init());
     ESP_ERROR_CHECK(host_link_init());
     init_button();
