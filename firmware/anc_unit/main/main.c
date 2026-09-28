@@ -52,7 +52,7 @@
 #include "oled.h"
 #include "speaker_level.h"
 
-#define FW_VERSION "0.6.3"
+#define FW_VERSION "0.6.4"
 
 static const char *TAG = "main";
 
@@ -114,6 +114,12 @@ extern const uint8_t denoiser_bin_end[] asm("_binary_denoiser_bin_end");
 typedef enum { STREAM_MICS, STREAM_CLEANED } stream_t;
 
 static atomic_int s_monitor = MON_MUTE;
+/* Speaker volume, set from the dashboard: step 0..VOLUME_STEPS-1, each step
+ * 6 dB. A small speaker driven too hard rattles and sounds blurred even on
+ * a clean tone (0.6.3 test), so the default is 12 dB below full. */
+#define VOLUME_STEPS 5
+#define VOLUME_DEFAULT 2
+static atomic_int s_volume = VOLUME_DEFAULT;
 static atomic_int s_stream = STREAM_MICS;
 static _Atomic float s_level_primary_db = -200.0f;
 static _Atomic float s_level_reference_db = -200.0f;
@@ -138,6 +144,11 @@ static float to_dbfs(double sum_sq, int n)
         return -200.0f; /* dead mic or all-zero data: usually a wiring fault */
     }
     return (float)(20.0 * log10(sqrt(sum_sq / n)));
+}
+
+static float volume_scale(void)
+{
+    return ldexpf(1.0f, atomic_load(&s_volume) - (VOLUME_STEPS - 1));   /* 1/16 .. 1 */
 }
 
 static int16_t to_monitor_sample(float v)
@@ -254,16 +265,17 @@ static void audio_task(void *arg)
         monitor_t mon = atomic_load(&s_monitor);
         const float *src = mon == MON_RAW ? p : mon == MON_AI ? final
                          : mon == MON_TWOMIC ? clean : mon == MON_REFERENCE ? r : NULL;
+        const float vol = volume_scale();
         if (mon == MON_TONE) {
             for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++, tone_n++) {
                 float hz = TONE_HZ[(tone_n / TONE_NOTE_SAMPLES) % 4];
                 tone_phase += 2.0f * (float)M_PI * hz / AUDIO_SAMPLE_RATE;
                 if (tone_phase > 2.0f * (float)M_PI) tone_phase -= 2.0f * (float)M_PI;
-                out[i] = to_monitor_sample(TONE_LEVEL * sinf(tone_phase));
+                out[i] = to_monitor_sample(vol * TONE_LEVEL * sinf(tone_phase));
             }
         } else {
             for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) {
-                out[i] = src ? to_monitor_sample(speaker_level_step(&speaker, src[i])) : 0;
+                out[i] = src ? to_monitor_sample(vol * speaker_level_step(&speaker, src[i])) : 0;
             }
         }
         audio_io_write_mono(out, AUDIO_BLOCK_FRAMES);
@@ -410,13 +422,22 @@ void dashboard_status_json(char *buf, size_t len)
              "{\"fw\":\"%s\",\"mode\":\"%s\",\"in\":%.1f,\"out\":%.1f,\"ref\":%.1f,"
              "\"ai\":%d,\"gain\":%.2f,\"speech\":%d,\"ai_us\":%u,\"late\":%u,"
              "\"late_recent\":%d,\"proc_us\":%u,\"delay_ms\":%.1f,\"rec\":%d,\"uptime_s\":%lld,"
-             "\"mic_lost\":%u,\"spk_gaps\":%u}",
+             "\"mic_lost\":%u,\"spk_gaps\":%u,\"vol\":%d,\"vol_max\":%d}",
              FW_VERSION, MON_NAMES[atomic_load(&s_monitor)], atomic_load(&s_level_primary_db),
              atomic_load(&s_level_ai_db), atomic_load(&s_level_reference_db), (int)s_dn_ok,
              atomic_load(&s_ai_gain), (int)atomic_load(&s_speech), atomic_load(&s_ai_us_max), late,
              (int)(now - last_late_us < 2000000), atomic_load(&s_proc_us_max),
              output_delay() * 1000.0 / AUDIO_SAMPLE_RATE, (int)host_link_streaming(),
-             (long long)(now / 1000000), (unsigned)mic_lost, (unsigned)spk_gaps);
+             (long long)(now / 1000000), (unsigned)mic_lost, (unsigned)spk_gaps,
+             atomic_load(&s_volume) + 1, VOLUME_STEPS);
+}
+
+void dashboard_change_volume(int delta)
+{
+    int v = atomic_load(&s_volume) + delta;
+    v = v < 0 ? 0 : v >= VOLUME_STEPS ? VOLUME_STEPS - 1 : v;
+    atomic_store(&s_volume, v);
+    ESP_LOGI(TAG, "speaker volume %d/%d", v + 1, VOLUME_STEPS);
 }
 
 bool dashboard_set_mode(const char *name)

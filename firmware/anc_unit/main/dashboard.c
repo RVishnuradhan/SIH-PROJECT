@@ -1,5 +1,6 @@
 #include "dashboard.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_check.h"
@@ -59,6 +60,18 @@ static esp_err_t mode_get(httpd_req_t *req)
     return httpd_resp_sendstr(req, ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
+static esp_err_t vol_get(httpd_req_t *req)
+{
+    char query[32], d[8];
+    bool ok = httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+              httpd_query_key_value(query, "d", d, sizeof(d)) == ESP_OK;
+    if (ok) {
+        dashboard_change_volume(atoi(d) > 0 ? 1 : -1);
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, ok ? "{\"ok\":true}" : "{\"ok\":false}");
+}
+
 static esp_err_t start_wifi(void)
 {
     esp_err_t err = nvs_flash_init();          /* the WiFi driver keeps calibration data here */
@@ -103,6 +116,7 @@ static esp_err_t start_dashboard(void)
         {.uri = "/", .method = HTTP_GET, .handler = page_get},
         {.uri = "/data", .method = HTTP_GET, .handler = data_get},
         {.uri = "/mode", .method = HTTP_GET, .handler = mode_get},
+        {.uri = "/vol", .method = HTTP_GET, .handler = vol_get},
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(server, &routes[i]);

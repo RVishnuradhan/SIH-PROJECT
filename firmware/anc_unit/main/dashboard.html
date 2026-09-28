@@ -36,6 +36,9 @@
   .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: #1f242d; color: var(--text); }
   button.wide { grid-column: 1 / -1; }
+  .vol { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+  .vol button { width: 64px; font-size: 22px; padding: 6px; }
+  .vol b { font-variant-numeric: tabular-nums; }
   button.on { border-color: var(--out); background: rgba(55, 211, 153, .15); color: var(--out); font-weight: 600; }
   .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
 </style>
@@ -80,6 +83,11 @@
       <button data-m="two-mic">2-mic only</button>
       <button data-m="mute">Mute</button>
       <button data-m="tone" class="wide">Test tone (speaker check)</button>
+    </div>
+    <div class="vol">
+      <button id="voldown" aria-label="Volume down">−</button>
+      <span>Volume <b id="vol">-</b></span>
+      <button id="volup" aria-label="Volume up">+</button>
     </div>
   </section>
 
@@ -131,11 +139,16 @@ function render(d) {
   $('inbar').style.width = frac(d.in) * 100 + '%';
   $('outbar').style.width = frac(d.out) * 100 + '%';
   const st = $('state');
-  if (!d.ai) { st.textContent = 'AI off (no model loaded)'; st.style.color = 'var(--bad)'; }
+  if (d.in < -99 && d.uptime_s > 2) {
+    /* Exact zeros from the mics: no power or a loose wire, not quiet. */
+    st.textContent = 'Mics silent: check mic wires (GPIO 4, 5, 6, 3V3, GND)'; st.style.color = 'var(--bad)';
+  }
+  else if (!d.ai) { st.textContent = 'AI off (no model loaded)'; st.style.color = 'var(--bad)'; }
   else if (d.late_recent) { st.textContent = 'AI running late'; st.style.color = 'var(--bad)'; }
   else if (d.gain > 0.35) { st.textContent = 'Voice passing through'; st.style.color = 'var(--out)'; }
   else { st.textContent = 'Cutting noise'; st.style.color = 'var(--warn)'; }
-  document.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === d.mode));
+  document.querySelectorAll('button[data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === d.mode));
+  $('vol').textContent = `${d.vol} / ${d.vol_max}`;
   $('foot').textContent = `firmware ${d.fw} · delay ${Math.round(d.delay_ms)} ms · ` +
                           `${d.late} dropped blocks · ${d.spk_gaps} speaker gaps · ` +
                           `${d.mic_lost} mic gaps` + (d.rec ? ' · recording' : '');
@@ -155,7 +168,9 @@ async function tick() {
   setTimeout(tick, 250);
 }
 
-document.querySelectorAll('button').forEach(b => b.onclick = () => fetch('/mode?m=' + b.dataset.m));
+document.querySelectorAll('button[data-m]').forEach(b => b.onclick = () => fetch('/mode?m=' + b.dataset.m));
+$('volup').onclick = () => fetch('/vol?d=1');
+$('voldown').onclick = () => fetch('/vol?d=-1');
 window.addEventListener('resize', draw);
 tick();
 </script>

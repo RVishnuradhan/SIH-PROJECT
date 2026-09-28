@@ -5,7 +5,8 @@
  *
  *   GET /         the page (main/dashboard.html, built into the firmware)
  *   GET /data     status as JSON, polled by the page 4 times a second
- *   GET /mode?m=  set what the speaker plays: mute, raw, ai, two-mic, reference
+ *   GET /mode?m=  set what the speaker plays: mute, raw, ai, two-mic, reference, tone
+ *   GET /vol?d=   speaker volume one step up (d=1) or down (d=-1)
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -22,3 +23,4 @@ esp_err_t dashboard_start(void);
 /* Implemented by the application (main.c). */
 void dashboard_status_json(char *buf, size_t len);
 bool dashboard_set_mode(const char *name);
+void dashboard_change_volume(int delta);

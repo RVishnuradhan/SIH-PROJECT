@@ -32,7 +32,7 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.6.3`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.6.4`, a `canceller:` line and
 a `denoiser:` line.
 
 ## Bring-up checklist (firmware 0.6)
@@ -44,7 +44,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.6.3`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.6.4`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -123,6 +123,12 @@ involved. If the notes sound blurred or buzzy too, look at the amp, speaker,
 wiring or 5 V supply, not the audio processing. The footer also counts
 **speaker gaps** (the amp ran out of sound: clicks) and **mic gaps** (mic
 sound lost); both should stay 0.
+
+**Volume (firmware 0.6.4):** the − / + buttons set the speaker volume in
+6 dB steps (1-5, starts at 3). On the team's board the test tone itself
+sounded blurred at full volume: a small speaker driven too hard rattles.
+Turn it down until the tone is clean. If the page says **Mics silent**, the
+mics send exact zeros: a mic wire is loose or the mics have no power.
 WiFi runs on core 1 next to the audio, never on core 0 with the AI (in 0.6.0
 it did, and the AI dropped blocks). An `sdkconfig` made before 0.6.1 still
 has the old setting and the build stops with a message: run
