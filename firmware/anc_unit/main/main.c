@@ -50,14 +50,18 @@
 #include "freertos/task.h"
 #include "host_link.h"
 #include "oled.h"
+#include "speaker_level.h"
 
-#define FW_VERSION "0.6.1"
+#define FW_VERSION "0.6.2"
 
 static const char *TAG = "main";
 
-/* +18 dB over the raw 24->16-bit conversion. INMP441 speech at arm's length
- * sits around -45 dBFS, which is inaudible without some gain. */
-#define MONITOR_GAIN (1 << 3)
+/* Speaker level (speaker_level.h): up to +18 dB for quiet sound, since
+ * INMP441 speech at arm's length sits around -45 dBFS, but loud sound is
+ * turned down so the output never passes -6 dBFS and never clips. */
+#define SPEAKER_GAIN_MAX 8.0f
+#define SPEAKER_CEILING 0.5f
+#define SPEAKER_RELEASE_S 0.3f
 
 /* Levels are averaged over this many blocks (0.5 s) before publishing. */
 #define LEVEL_BLOCKS 50
@@ -127,7 +131,7 @@ static float to_dbfs(double sum_sq, int n)
 
 static int16_t to_monitor_sample(float v)
 {
-    float s = v * 32768.0f * MONITOR_GAIN;
+    float s = v * 32768.0f;
     if (s > INT16_MAX) return INT16_MAX;
     if (s < INT16_MIN) return INT16_MIN;
     return (int16_t)s;
@@ -158,6 +162,9 @@ static void audio_task(void *arg)
     double acc_p = 0, acc_r = 0, acc_c = 0, acc_a = 0;
     int acc_blocks = 0;
     uint32_t proc_max = 0;
+    static speaker_level_t speaker;
+    speaker_level_init(&speaker, SPEAKER_GAIN_MAX, SPEAKER_CEILING, SPEAKER_RELEASE_S,
+                       AUDIO_SAMPLE_RATE);
 
     for (;;) {
         if (audio_io_read(primary, reference, AUDIO_BLOCK_FRAMES) != ESP_OK) {
@@ -235,7 +242,7 @@ static void audio_task(void *arg)
         const float *src = mon == MON_RAW ? p : mon == MON_AI ? final
                          : mon == MON_TWOMIC ? clean : mon == MON_REFERENCE ? r : NULL;
         for (int i = 0; i < AUDIO_BLOCK_FRAMES; i++) {
-            out[i] = src ? to_monitor_sample(src[i]) : 0;
+            out[i] = src ? to_monitor_sample(speaker_level_step(&speaker, src[i])) : 0;
         }
         audio_io_write_mono(out, AUDIO_BLOCK_FRAMES);
     }

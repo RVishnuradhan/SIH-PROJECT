@@ -32,7 +32,7 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.6.1`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.6.2`, a `canceller:` line and
 a `denoiser:` line.
 
 ## Bring-up checklist (firmware 0.6)
@@ -44,7 +44,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.6.1`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.6.2`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -69,6 +69,10 @@ mic is louder than the outward mic".
    | 5 | nothing again |
 
    If it howls, the speaker is too close. Press until it is quiet.
+   The volume is automatic (firmware 0.6.2): quiet sound is boosted up to
+   +18 dB, loud sound (a voice right at mic 1, gunfire) is turned down so it
+   never clips. Up to 0.6.1 a fixed +18 dB clipped 5-19% of the samples in
+   the team's recordings, and the speaker sounded blurred.
 4. **Before/after recording.** Play noise near the unit (fan, music, a
    video of engine noise) and talk into mic 1:
    ```
