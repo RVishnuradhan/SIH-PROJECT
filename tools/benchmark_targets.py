@@ -75,9 +75,23 @@ def score_scene(model, s, x1, x2):
     }
 
 
-def run(model, snrs, n_scenes):
-    clean, noise, real = bds.file_lists(ROOT / "data", "val")
-    bds._init(clean, noise, real, mics=2)
+def noise_type(name):
+    """A callable making one source of the named noise type, or None for the mix."""
+    if name == "mix":
+        return None
+    if name == "dns":
+        return lambda rng: bds._crop(bds._G["noise"][int(rng.integers(len(bds._G["noise"])))], rng)
+    gens = {g.__name__: g for g in bds.SYNTH}
+    if name not in gens:
+        raise SystemExit(f"unknown noise type {name!r}; choose mix, dns, {', '.join(sorted(gens))}")
+    return lambda rng: gens[name](bds.N, rng).astype(np.float64)
+
+
+def run(model, snrs, n_scenes, noise="mix"):
+    clean, noise_files, real = bds.file_lists(ROOT / "data", "val")
+    force = noise_type(noise)
+    bds._init(clean, noise_files, [] if force else real, mics=2)
+    bds._G["force"] = force
     out = {}
     for snr in snrs:
         rows, seed = [], 40_000_000 + 1000 * int(snr + 50)
@@ -114,13 +128,18 @@ def main():
     ap.add_argument("--snrs", type=float, nargs="+", default=[-5, 0, 5, 10, 15])
     ap.add_argument("--n", type=int, default=40, help="scenes per input SNR")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--legacy-noise", action="store_true",
+                    help="only the synthetic noise types the first model was trained on (reproduces the README table)")
+    ap.add_argument("--noise", default="mix", help="mix (default), dns, or one synthetic type, e.g. impulse_burst")
     ap.add_argument("--floor-db", type=float, default=-30.0, help="smallest gain of the network (firmware: -30)")
     ap.add_argument("--rule-floor-db", type=float, default=-25.0, help="smallest gain of the level rule (firmware: -25)")
     args = ap.parse_args()
     FLOOR_DB, RULE_FLOOR_DB = args.floor_db, args.rule_floor_db
+    if args.legacy_noise:
+        bds.SYNTH = bds.SYNTH_LEGACY
 
     model = dequantized(load(args.model))               # what the device runs
-    table = summarize(run(model, args.snrs, args.n))
+    table = summarize(run(model, args.snrs, args.n, args.noise))
 
     print(f"\nTargets: output SNR > {TARGETS['snr_db']} dB, STOI > {TARGETS['stoi']}, PESQ > {TARGETS['pesq']}"
           f"   (delay {LATENCY_MS:.0f} ms)")

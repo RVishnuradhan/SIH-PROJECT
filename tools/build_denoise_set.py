@@ -35,8 +35,13 @@ from anc.postfilter import stft  # noqa: E402
 SECONDS = 3.0
 N = int(SECONDS * SAMPLE_RATE)
 HPF = HIGHPASS_SOS            # the device applies the same filter to its input
-SYNTH = [synth.engine_hum, synth.machinery_hum, synth.engine_rev, synth.vehicle_passby,
-         synth.wind_gust, synth.impulse_burst, synth.impulse_burst]   # impulses twice: gunfire matters
+SYNTH_LEGACY = [synth.engine_hum, synth.machinery_hum, synth.engine_rev, synth.vehicle_passby,
+                synth.wind_gust, synth.impulse_burst, synth.impulse_burst]   # impulses twice: gunfire matters
+# The rest of the problem statement's list: sirens, helicopter rotor, drones,
+# armoured (tracked) vehicles, artillery.
+SYNTH_NEW = [synth.siren, synth.helicopter_rotor, synth.drone_propellers, synth.tracked_vehicle,
+             synth.artillery]
+SYNTH = SYNTH_LEGACY + SYNTH_NEW
 
 _G: dict = {}
 
@@ -110,6 +115,8 @@ def make_example(seed: int):
 
 def _noise_source(rng):
     """One noise source signal, as in make_example."""
+    if _G.get("force"):                                      # benchmark: one noise type only
+        return _G["force"](rng)
     noise = _G["noise"]
     u = rng.random()
     if u < 0.65 or not SYNTH:

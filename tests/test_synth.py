@@ -6,7 +6,8 @@ from anc.config import SAMPLE_RATE
 
 N = SAMPLE_RATE // 2
 ALL = [synth.engine_hum, synth.machinery_hum, synth.engine_rev, synth.vehicle_passby,
-       synth.wind_gust, synth.impulse_burst, synth.speech_like]
+       synth.wind_gust, synth.impulse_burst, synth.siren, synth.helicopter_rotor,
+       synth.drone_propellers, synth.tracked_vehicle, synth.artillery, synth.speech_like]
 
 
 def _crest(x):
@@ -42,3 +43,27 @@ def test_engine_energy_is_low_frequency():
     spec = np.abs(np.fft.rfft(x)) ** 2
     freqs = np.fft.rfftfreq(len(x), 1 / SAMPLE_RATE)
     assert spec[freqs < 1000].sum() / spec.sum() > 0.8
+
+
+def _band_share(x, lo, hi):
+    spec = np.abs(np.fft.rfft(x)) ** 2
+    f = np.fft.rfftfreq(len(x), 1 / SAMPLE_RATE)
+    return spec[(f >= lo) & (f < hi)].sum() / spec.sum()
+
+
+def test_siren_is_a_narrow_tone_in_the_speech_band():
+    x = synth.siren(SAMPLE_RATE, np.random.default_rng(5))
+    assert _band_share(x, 300, 4000) > 0.9
+
+
+def test_artillery_is_mostly_below_200_hz_and_helicopter_is_thumpy():
+    art = synth.artillery(2 * SAMPLE_RATE, np.random.default_rng(6))
+    assert _band_share(art, 0, 200) > 0.6
+    heli = np.median([_crest(synth.helicopter_rotor(N, np.random.default_rng(i))) for i in range(8)])
+    eng = np.median([_crest(synth.engine_hum(N, np.random.default_rng(i))) for i in range(8)])
+    assert heli > 1.3 * eng
+
+
+def test_drone_sits_in_the_hundreds_of_hertz():
+    x = synth.drone_propellers(SAMPLE_RATE, np.random.default_rng(8))
+    assert _band_share(x, 150, 6000) > 0.9

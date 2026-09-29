@@ -216,6 +216,135 @@ def impulse_burst_events(
     return _normalize(out), np.array(sorted(onsets), dtype=np.int64)
 
 
+# --- More sources from the problem statement -----------------------------
+#
+# Emergency sirens, helicopter rotors, drones, armoured (tracked) vehicles and
+# artillery. Like the rest of this module they are physical sketches of the
+# sources, not recordings.
+
+def siren(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Emergency siren: a frequency-swept tone with harmonics.
+
+    Wail (slow rise and fall), yelp (fast) or hi-lo (two alternating notes).
+    The tone is loud and narrow-band, which is what makes it hard: it sits
+    right in the speech band.
+    """
+    t = np.arange(n, dtype=np.float64) / SAMPLE_RATE
+    style = int(rng.integers(0, 3))
+    lo = float(rng.uniform(450.0, 800.0))
+    hi = lo * float(rng.uniform(1.4, 2.2))
+    rate = float(rng.uniform(0.15, 0.4)) if style == 0 else float(rng.uniform(2.0, 4.5))
+    if style == 2:                                            # hi-lo: two steady notes
+        contour = np.where(np.sin(2 * np.pi * rate * 0.25 * t) > 0, hi, lo)
+    else:                                                     # wail / yelp
+        contour = lo + (hi - lo) * 0.5 * (1.0 - np.cos(2 * np.pi * rate * t + rng.uniform(0, 6.28)))
+    phase = 2 * np.pi * np.cumsum(contour) / SAMPLE_RATE
+    sig = np.zeros(n, dtype=np.float64)
+    for k, amp in enumerate((1.0, 0.5, 0.35, 0.2, 0.12), start=1):
+        if hi * k >= SAMPLE_RATE / 2:
+            break
+        sig += amp * np.sin(k * phase)
+    hiss = colored_noise(n, exponent=1.0, rng=rng)
+    return _normalize(0.93 * _normalize(sig) + 0.07 * hiss)
+
+
+def helicopter_rotor(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Helicopter: blade-slap thumps at the blade-pass rate over a turbine whine.
+
+    Main rotor blade pass is roughly 10-30 Hz (blades x rpm / 60); each blade
+    passing gives a short low-frequency thump. A tail rotor adds a faster
+    stack, and a turbine adds a high, steady whine.
+    """
+    t = np.arange(n, dtype=np.float64) / SAMPLE_RATE
+    f_bp = float(rng.uniform(10.0, 28.0))
+    thumps = np.zeros(n, dtype=np.float64)
+    step = SAMPLE_RATE / f_bp
+    pos = float(rng.uniform(0, step))
+    while pos < n:
+        length = min(int(0.03 * SAMPLE_RATE), n - int(pos))
+        if length > 2:
+            k = np.arange(length, dtype=np.float64)
+            burst = colored_noise(length, exponent=float(rng.uniform(1.0, 2.0)), rng=rng)
+            thumps[int(pos): int(pos) + length] += float(rng.uniform(0.7, 1.0)) * burst * np.exp(-k / (0.006 * SAMPLE_RATE))
+        pos += step * float(rng.uniform(0.94, 1.06))          # blade spacing is never exact
+    hum = sum((1.0 / k) * np.sin(2 * np.pi * f_bp * k * t + rng.uniform(0, 6.28)) for k in range(1, 9))
+    tail = sum((1.0 / k) * np.sin(2 * np.pi * float(rng.uniform(4.0, 6.5)) * f_bp * k * t + rng.uniform(0, 6.28))
+               for k in range(1, 5))
+    whine_f = float(rng.uniform(900.0, 3000.0)) * (1.0 + 0.01 * np.sin(2 * np.pi * 0.3 * t))
+    whine = np.sin(2 * np.pi * np.cumsum(whine_f) / SAMPLE_RATE)
+    floor = colored_noise(n, exponent=1.0, rng=rng)
+    sig = (0.9 * _normalize(thumps) + 0.5 * _normalize(hum) + 0.25 * _normalize(tail)
+           + float(rng.uniform(0.05, 0.25)) * whine + 0.2 * floor)
+    return _normalize(sig)
+
+
+def drone_propellers(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Multicopter: four motors, each a harmonic stack near 200-700 Hz.
+
+    The motors are a few percent apart and wobble as the flight controller
+    trims them, so the sum beats and shimmers rather than holding one pitch.
+    """
+    t = np.arange(n, dtype=np.float64) / SAMPLE_RATE
+    base = float(rng.uniform(200.0, 700.0))
+    sig = np.zeros(n, dtype=np.float64)
+    for _ in range(4):
+        f = base * float(rng.uniform(0.97, 1.03))
+        wobble = 1.0 + 0.02 * np.sin(2 * np.pi * float(rng.uniform(0.3, 2.0)) * t + rng.uniform(0, 6.28))
+        phase = 2 * np.pi * np.cumsum(f * wobble) / SAMPLE_RATE
+        for k in range(1, 9):
+            if f * 1.05 * k >= SAMPLE_RATE / 2:
+                break
+            sig += (1.0 / k ** 1.2) * float(rng.uniform(0.6, 1.4)) * np.sin(k * phase + rng.uniform(0, 6.28))
+    floor = colored_noise(n, exponent=0.5, rng=rng)
+    return _normalize(0.85 * _normalize(sig) + 0.15 * floor)
+
+
+def tracked_vehicle(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Armoured tracked vehicle: a low engine rumble under track clatter.
+
+    Each track link hitting the sprocket is a short ringing click (a
+    resonance near 0.8-2.5 kHz) repeating at 10-25 Hz.
+    """
+    engine = engine_rev(n, rng)
+    clack = np.zeros(n, dtype=np.float64)
+    step = SAMPLE_RATE / float(rng.uniform(10.0, 25.0))
+    f_res = float(rng.uniform(800.0, 2500.0))
+    pos = float(rng.uniform(0, step))
+    while pos < n:
+        length = min(int(0.02 * SAMPLE_RATE), n - int(pos))
+        if length > 2:
+            k = np.arange(length, dtype=np.float64)
+            clack[int(pos): int(pos) + length] += float(rng.uniform(0.5, 1.0)) * np.sin(
+                2 * np.pi * f_res * k / SAMPLE_RATE) * np.exp(-k / (0.004 * SAMPLE_RATE))
+        pos += step * float(rng.uniform(0.9, 1.1))
+    return _normalize(0.7 * engine + 0.5 * _normalize(clack))
+
+
+def artillery(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Artillery: a sharp crack, a heavy low thump and a long rumbling tail.
+
+    Slower and far lower than small-arms gunfire (`impulse_burst`): most of the
+    energy is below 150 Hz and one round rings for a second or more.
+    """
+    out = np.zeros(n, dtype=np.float64)
+    rate = float(rng.uniform(0.3, 1.5))
+    n_events = max(1, int(rng.poisson(rate * n / SAMPLE_RATE)))
+    for _ in range(n_events):
+        start = int(rng.integers(0, max(n - 1, 1)))
+        length = min(int(rng.uniform(0.6, 1.5) * SAMPLE_RATE), n - start)
+        if length <= 1:
+            continue
+        k = np.arange(length, dtype=np.float64)
+        crack = colored_noise(length, exponent=0.3, rng=rng) * np.exp(-k / (0.004 * SAMPLE_RATE))
+        f = 30.0 + 60.0 * np.exp(-k / (0.05 * SAMPLE_RATE))            # thump falls 90 -> 30 Hz
+        thump = np.sin(2 * np.pi * np.cumsum(f) / SAMPLE_RATE) * np.exp(-k / (0.12 * SAMPLE_RATE))
+        tail = colored_noise(length, exponent=2.0, rng=rng) * np.exp(-k / (0.35 * SAMPLE_RATE))
+        out[start: start + length] += float(rng.uniform(0.6, 1.0)) * (0.5 * crack + 1.0 * thump + 0.7 * tail)
+    if _rms(out) < 1e-9:
+        out[n // 2] = 1.0
+    return _normalize(out)
+
+
 # --- Speech-like ---------------------------------------------------------
 
 _VOWEL_FORMANTS = {            # F1, F2, F3 in Hz, adult-average
