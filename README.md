@@ -196,6 +196,33 @@ the board.
   more training is needed.
 - Delay from mic to output: **35 ms**, measured on the board.
 
+#### By noise type (deployed model, input SNR 10 dB, 15 scenes each)
+
+| Noise | Output SNR | STOI | PESQ |
+|---|---|---|---|
+| Artillery | 33.5 dB | 0.98 | **3.16** |
+| Siren | 25.0 dB | 0.94 | **2.52** |
+| Wind | 24.2 dB | 0.95 | 2.47 |
+| Drone propellers | 24.5 dB | 0.94 | 2.43 |
+| General noise (DNS clips) | 26.8 dB | 0.93 | 2.40 |
+| Armoured vehicle (tracked) | 22.7 dB | 0.95 | 2.34 |
+| Engine (steady) | 23.4 dB | 0.95 | 2.31 |
+| Engine (revving) | 24.2 dB | 0.94 | 2.27 |
+| Gunfire-like impulses | 25.7 dB | 0.92 | 2.23 |
+| Machinery / fan | 23.7 dB | 0.93 | 2.21 |
+| Helicopter rotor | 23.1 dB | 0.93 | 2.08 |
+
+At this noise level SNR and STOI are met for every type and PESQ is met for
+artillery and sirens. Rhythmic, wide-band noise (helicopter, machinery,
+gunfire) is hardest for PESQ. `tools/benchmark_targets.py --noise <type>`
+reproduces one row.
+
+A second model trained with sirens, helicopter rotor, drones, tracked vehicles
+and artillery added to the training noise (30 epochs, 24,000 examples) scored
+the same as this one on all of the above (within 0.05 PESQ) and on the old
+noise mix, so the deployed model was kept. The five generators stay in
+`anc.synth` and in the training mix (`SYNTH_NEW`).
+
 ### Why the classifier is not in the audio path
 
 The canceller runs on every sample. The classifier looks at 265 ms of audio and
