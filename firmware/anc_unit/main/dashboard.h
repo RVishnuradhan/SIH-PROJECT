@@ -5,6 +5,7 @@
  *
  *   GET /         the page (main/dashboard.html, built into the firmware)
  *   GET /data     status as JSON, polled by the page 4 times a second
+ *   GET /bench    lab results for the Targets card (main/benchmark.json)
  *   GET /mode?m=  set what the speaker plays: mute, raw, ai, two-mic, reference, tone
  *   GET /vol?d=   speaker volume one step up (d=1) or down (d=-1)
  */

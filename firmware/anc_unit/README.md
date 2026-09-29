@@ -32,7 +32,7 @@ idf.py build
 idf.py -p <UART port> flash monitor
 ```
 
-The monitor should print `ANC unit firmware 0.6.5`, a `canceller:` line and
+The monitor should print `ANC unit firmware 0.6.6`, a `canceller:` line and
 a `denoiser:` line.
 
 ## Bring-up checklist (firmware 0.6)
@@ -44,7 +44,7 @@ Speech for the canceller is still detected with a simple rule: "the mouth
 mic is louder than the outward mic".
 
 1. **Flash, then check the log on the UART port.** You should see
-   `ANC unit firmware 0.6.5`, a `canceller:` line and a `denoiser:` line
+   `ANC unit firmware 0.6.6`, a `canceller:` line and a `denoiser:` line
    saying `internal RAM`, with no errors.
 2. **Check mic levels.** Connect the native USB port and run:
    ```
@@ -116,6 +116,18 @@ and buttons for what the speaker plays (raw mic / AI clean / 2-mic only /
 mute). The footer shows the firmware version, the delay and how many audio
 blocks the AI dropped (should stay 0). Up to 4 phones can watch at once.
 The UART log says `dashboard: WiFi "HERTZ-HUNTERS-ANC" ...` at start-up.
+
+**Project targets card (firmware 0.6.6):** shows the problem statement's targets
+(SNR > 15 dB, STOI > 0.85, PESQ > 2.5) with the lab result for the noise level
+you pick, and the live mic-to-speaker delay. STOI and PESQ need the original
+clean voice, so they cannot be measured live: the numbers come from
+`main/benchmark.json`, made by `tools/benchmark_targets.py` and built into the
+firmware. The statement gives no number for the delay; the card uses the
+telephone guideline of 150 ms one way (ITU-T G.114). After retraining, refresh
+the card with:
+```
+python tools/benchmark_targets.py runs/denoiser_2mic/denoiser.pt --json firmware/anc_unit/main/benchmark.json
+```
 
 **Speaker check (firmware 0.6.3):** the **Test tone** button (also the last
 BOOT-button step) plays clean notes straight to the amp, with no mic

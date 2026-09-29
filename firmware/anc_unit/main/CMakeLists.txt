@@ -6,6 +6,7 @@ idf_component_register(
                   esp_http_server anc_core anc_denoise
     # Neural suppressor weights, from tools/export_denoiser.py.
     EMBED_FILES "denoiser.bin"
-    # The phone dashboard page.
-    EMBED_TXTFILES "dashboard.html"
+    # The phone dashboard page, and the lab results (tools/benchmark_targets.py)
+    # its Targets card shows.
+    EMBED_TXTFILES "dashboard.html" "benchmark.json"
 )

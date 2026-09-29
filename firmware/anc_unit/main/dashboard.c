@@ -41,6 +41,15 @@ static esp_err_t page_get(httpd_req_t *req)
     return httpd_resp_send(req, page_start, page_end - page_start - 1);
 }
 
+extern const char bench_start[] asm("_binary_benchmark_json_start");
+extern const char bench_end[] asm("_binary_benchmark_json_end");
+
+static esp_err_t bench_get(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, bench_start, bench_end - bench_start - 1);
+}
+
 static esp_err_t data_get(httpd_req_t *req)
 {
     char json[512];
@@ -115,6 +124,7 @@ static esp_err_t start_dashboard(void)
     const httpd_uri_t routes[] = {
         {.uri = "/", .method = HTTP_GET, .handler = page_get},
         {.uri = "/data", .method = HTTP_GET, .handler = data_get},
+        {.uri = "/bench", .method = HTTP_GET, .handler = bench_get},
         {.uri = "/mode", .method = HTTP_GET, .handler = mode_get},
         {.uri = "/vol", .method = HTTP_GET, .handler = vol_get},
     };

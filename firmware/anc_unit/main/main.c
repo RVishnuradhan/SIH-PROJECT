@@ -52,7 +52,7 @@
 #include "oled.h"
 #include "speaker_level.h"
 
-#define FW_VERSION "0.6.5"
+#define FW_VERSION "0.6.6"
 
 static const char *TAG = "main";
 

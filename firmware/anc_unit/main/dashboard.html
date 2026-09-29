@@ -36,6 +36,17 @@
   .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: #1f242d; color: var(--text); }
   button.wide { grid-column: 1 / -1; }
+  .chips { display: flex; gap: 6px; margin: 4px 0 12px; }
+  .chips button { flex: 1; padding: 8px 0; font-size: 14px; }
+  .goal { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .goal:first-of-type { border-top: 0; }
+  .goal .name { font-weight: 600; }
+  .goal .hint { color: var(--muted); font-size: 12px; }
+  .goal .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .goal .badge { font-size: 12px; font-weight: 600; }
+  .goal.ok .val, .goal.ok .badge { color: var(--out); }
+  .goal.miss .val, .goal.miss .badge { color: var(--bad); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .vol { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
   .vol button { width: 64px; font-size: 22px; padding: 6px; }
   .vol b { font-variant-numeric: tabular-nums; }
@@ -73,6 +84,14 @@
   <section class="card">
     <canvas id="chart"></canvas>
     <div class="legend"><span style="color:var(--in)">Noisy input</span><span style="color:var(--out)">Clean output</span><span>last 60 s</span></div>
+  </section>
+
+  <section class="card" id="targets" hidden>
+    <div class="sub">Project targets</div>
+    <div class="note" style="margin:2px 0 10px">Lab test: known voice mixed with noise, run through this unit's AI. Pick how noisy the input was.</div>
+    <div class="chips" id="chips"></div>
+    <div id="goals"></div>
+    <div class="note">STOI and PESQ need the original clean voice, so they are lab results, not live readings.</div>
   </section>
 
   <section class="card">
@@ -126,7 +145,40 @@ function draw() {
   }
 }
 
+/* Project targets (the problem statement): SNR > 15 dB, STOI > 0.85, PESQ > 2.5,
+   at low delay. It gives no number for the delay; 150 ms one way is the
+   telephone guideline (ITU-T G.114). */
+const DELAY_LIMIT_MS = 150;
+let bench = null, benchSnr = '5', liveDelay = null;
+
+function renderTargets() {
+  if (!bench) return;
+  const row = bench.by_input_snr[benchSnr], t = bench.targets;
+  $('chips').innerHTML = Object.keys(bench.by_input_snr).sort((a, b) => a - b).map(k =>
+    `<button data-b="${k}" class="${k === benchSnr ? 'on' : ''}">${k} dB</button>`).join('');
+  document.querySelectorAll('#chips button').forEach(b => b.onclick = () => { benchSnr = b.dataset.b; renderTargets(); });
+  const goal = (name, hint, val, text, ok, yes = 'target met', no = 'target not met') =>
+    `<div class="goal ${ok ? 'ok' : 'miss'}"><div><div class="name">${name}</div><div class="hint">${hint}</div></div>` +
+    `<div><div class="val">${text}</div><div class="badge">${ok ? '✓ ' + yes : '✗ ' + no}</div></div></div>`;
+  let html =
+    goal('SNR', `target > ${t.snr_db} dB`, row.snr_db, row.snr_db.toFixed(1) + ' dB', row.snr_db > t.snr_db) +
+    goal('STOI', `target > ${t.stoi} · noisy input ${row.stoi_in.toFixed(2)}`, row.stoi, row.stoi.toFixed(2), row.stoi > t.stoi) +
+    goal('PESQ', `target > ${t.pesq} · noisy input ${row.pesq_in.toFixed(2)}`, row.pesq, row.pesq.toFixed(2), row.pesq > t.pesq);
+  if (liveDelay !== null) {
+    html += goal('Delay (live)', `mic to speaker · guideline ≤ ${DELAY_LIMIT_MS} ms`, liveDelay,
+                 Math.round(liveDelay) + ' ms', liveDelay <= DELAY_LIMIT_MS, 'within guideline', 'over guideline');
+  }
+  $('goals').innerHTML = html;
+  $('targets').hidden = false;
+}
+
+async function loadBench() {
+  try { bench = await (await fetch('/bench', {cache: 'no-store'})).json(); renderTargets(); }
+  catch (e) { setTimeout(loadBench, 3000); }
+}
+
 function render(d) {
+  if (liveDelay !== d.delay_ms) { liveDelay = d.delay_ms; renderTargets(); }
   /* While someone talks the voice dominates both levels and little is
      removed; what a listener notices is the noise between words. */
   if (d.ai && d.gain <= 0.35 && d.in > -99) {
@@ -173,6 +225,7 @@ $('volup').onclick = () => fetch('/vol?d=1');
 $('voldown').onclick = () => fetch('/vol?d=-1');
 window.addEventListener('resize', draw);
 tick();
+loadBench();
 </script>
 </body>
 </html>
