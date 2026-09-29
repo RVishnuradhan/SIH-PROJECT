@@ -1,0 +1,92 @@
+#pragma once
+/*
+ * Neural noise suppressor: plain C, no ESP-IDF dependencies.
+ *
+ * C port of anc.denoiser (Python). Every 8 ms (128 samples):
+ *   60 Hz high-pass -> 256-sample frame, sqrt-Hann -> FFT -> log energy in 24 bands
+ *   (of the mouth mic, and for two-mic models also of the outward mic)
+ *   -> Dense 64 (tanh) -> GRU 96 -> GRU 96 -> Dense 24 (sigmoid)
+ *   -> 24 band gains spread over 129 FFT bins
+ *   -> optional two-mic level rule (anc_denoise_set_rule) -> inverse FFT -> overlap-add.
+ *
+ * The weights come from tools/export_denoiser.py as one blob (int8 weights
+ * with a float scale per row). tests/test_denoiser_c.py checks this code
+ * against the Python network sample for sample.
+ *
+ * Memory is supplied by the caller (see anc_denoise_mem_size); init copies
+ * the weights into it and keeps all buffers there, so the firmware can put
+ * everything in internal RAM. The struct itself stays small (a few hundred
+ * bytes): anc_denoise_mem_size builds one on the stack, and firmware 0.4.1
+ * overflowed the 3.5 KB main task stack when the buffers lived inside it.
+ */
+#include <stddef.h>
+#include <stdint.h>
+
+#define ANC_DN_FRAME 256
+#define ANC_DN_HOP 128
+#define ANC_DN_BINS (ANC_DN_FRAME / 2 + 1)
+
+typedef struct {
+    int rows, cols;
+    const float *scale;     /* [rows] */
+    const float *bias;      /* [rows] */
+    const int8_t *w;        /* [rows][cols] */
+} anc_dn_layer_t;
+
+typedef struct {
+    int bands, dense, hidden;
+    int mics;                        /* 1: mouth mic only; 2: also the outward mic */
+    const float *in_mean, *in_std;   /* [bands * mics] feature normalisation */
+    const float *band_matrix;        /* [bands][bins]; columns sum to 1 */
+    anc_dn_layer_t inp, gru1_ih, gru1_hh, gru2_ih, gru2_hh, out;
+
+    float hp_b0, hp_b1, hp_a1, hp_z; /* input high-pass and its state */
+    float hp_z2;                     /* ... for the outward mic */
+    float floor_gain;                /* smallest per-bin gain (-30 dB = 0.0316) */
+    float rule_alpha, rule_floor;    /* level rule; alpha 0 = off */
+    float rule_leak;                 /* learned outward/mouth power ratio of the voice */
+    float *rule_sp, *rule_sr;        /* [bins] smoothed mouth / outward mic power */
+    float *h1, *h2;                  /* GRU states [hidden] */
+    float *scratch;                  /* layer outputs */
+    float *gains;                    /* last band gains [bands] */
+    float *frame;                    /* [frame] newest 256 input samples */
+    float *frame2;                   /* [frame] ... of the outward mic */
+    float *overlap;                  /* [hop] second half of the previous output frame */
+    float *re, *im;                  /* [frame] FFT work */
+    float *win;                      /* [frame] sqrt-Hann */
+    float *cos_tab, *sin_tab;        /* [frame / 2] */
+    uint8_t *bitrev;                 /* [frame] */
+
+    /* Block adapter: any block size in, the same size out, fixed latency. */
+    int block;
+    float *fifo_in, *fifo_in2, *fifo_out;
+    int n_in, n_out;
+} anc_denoise_t;
+
+/* Bytes of caller memory needed for this blob and block size, or 0 if the
+ * blob is not a valid export. */
+size_t anc_denoise_mem_size(const void *blob, size_t len, int block);
+
+/* Returns 0 on success, negative if the blob is invalid. */
+int anc_denoise_init(anc_denoise_t *d, const void *blob, size_t len, int block,
+                     float floor_db, void *mem);
+
+/* Two-mic level rule on top of the network (anc.denoiser.level_rule_gains):
+ * per bin, gain *= clip(1 - alpha * max(ratio - leak, 0) / (1 - leak), floor, 1)
+ * with ratio = outward / mouth mic power and leak learned from the voice.
+ * Needs `ref` in every call. alpha 0 turns it off (the default). */
+void anc_denoise_set_rule(anc_denoise_t *d, float alpha, float floor_db);
+
+/* One hop: 128 new samples in, 128 finished samples out, 128 samples late.
+ * `ref` is the outward mic, time-aligned with `in`; may be NULL for a
+ * one-mic model with the level rule off. Only `in` is cleaned. */
+void anc_denoise_hop(anc_denoise_t *d, const float *in, const float *ref, float *out);
+
+/* `block` samples in, `block` out. Output lags input by anc_denoise_latency(). */
+void anc_denoise_process(anc_denoise_t *d, const float *in, const float *ref, float *out);
+
+/* Samples between a sample going in and the same sample coming out. */
+int anc_denoise_latency(const anc_denoise_t *d);
+
+/* Mean band gain of the last frame: 1 = passed through, near 0 = suppressed. */
+float anc_denoise_mean_gain(const anc_denoise_t *d);

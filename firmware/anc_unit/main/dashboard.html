@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hertz Hunters ANC</title>
+<style>
+  :root {
+    --bg: #0e1116; --card: #171b22; --line: #262c36; --text: #e8edf3; --muted: #8a94a3;
+    --in: #9aa4b2; --out: #37d399; --warn: #f5b942; --bad: #f25f5c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .04em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.live { background: rgba(55, 211, 153, .15); color: var(--out); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+  .big { text-align: center; }
+  .big .label { color: var(--muted); font-size: 14px; }
+  .big .value { font-size: 64px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .big .value small { font-size: 24px; font-weight: 500; color: var(--muted); }
+  .state { margin-top: 6px; font-weight: 600; }
+  .meter { margin: 10px 0 14px; }
+  .meter:last-child { margin-bottom: 0; }
+  .meter .row { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 6px; }
+  .meter .row b { font-variant-numeric: tabular-nums; }
+  .bar { height: 12px; border-radius: 6px; background: var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; border-radius: 6px; transition: width .2s; }
+  canvas { width: 100%; height: 160px; display: block; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; margin-right: 6px; vertical-align: middle; background: currentColor; }
+  .modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: #1f242d; color: var(--text); }
+  button.wide { grid-column: 1 / -1; }
+  .chips { display: flex; gap: 6px; margin: 4px 0 12px; }
+  .chips button { flex: 1; padding: 8px 0; font-size: 14px; }
+  .goal { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .goal:first-of-type { border-top: 0; }
+  .goal .name { font-weight: 600; }
+  .goal .hint { color: var(--muted); font-size: 12px; }
+  .goal .val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+  .goal .badge { font-size: 12px; font-weight: 600; }
+  .goal.ok .val, .goal.ok .badge { color: var(--out); }
+  .goal.miss .val, .goal.miss .badge { color: var(--bad); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .vol { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+  .vol button { width: 64px; font-size: 22px; padding: 6px; }
+  .vol b { font-variant-numeric: tabular-nums; }
+  button.on { border-color: var(--out); background: rgba(55, 211, 153, .15); color: var(--out); font-weight: 600; }
+  .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>HERTZ HUNTERS</h1>
+      <div class="sub">AI noise cancelling unit</div>
+    </div>
+    <span class="pill" id="link">connecting…</span>
+  </header>
+
+  <section class="card big">
+    <div class="label">Noise removed between words</div>
+    <div class="value"><span id="removed">--</span> <small>dB</small></div>
+    <div class="state" id="state">&nbsp;</div>
+  </section>
+
+  <section class="card">
+    <div class="meter">
+      <div class="row"><span>Noisy input (mic)</span><b id="in">-- dB</b></div>
+      <div class="bar"><i id="inbar" style="background:var(--in)"></i></div>
+    </div>
+    <div class="meter">
+      <div class="row"><span>Clean output (to HQ)</span><b id="out">-- dB</b></div>
+      <div class="bar"><i id="outbar" style="background:var(--out)"></i></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <canvas id="chart"></canvas>
+    <div class="legend"><span style="color:var(--in)">Noisy input</span><span style="color:var(--out)">Clean output</span><span>last 60 s</span></div>
+  </section>
+
+  <section class="card" id="targets" hidden>
+    <div class="sub">Project targets</div>
+    <div class="note" style="margin:2px 0 10px">Lab test: known voice mixed with noise, run through this unit's AI. Pick how noisy the input was.</div>
+    <div class="chips" id="chips"></div>
+    <div id="goals"></div>
+    <div class="note">STOI and PESQ need the original clean voice, so they are lab results, not live readings.</div>
+  </section>
+
+  <section class="card">
+    <div class="sub" style="margin-bottom:10px">Speaker plays</div>
+    <div class="modes">
+      <button data-m="raw">Raw mic</button>
+      <button data-m="ai">AI clean</button>
+      <button data-m="two-mic">2-mic only</button>
+      <button data-m="mute">Mute</button>
+      <button data-m="tone" class="wide">Test tone (speaker check)</button>
+    </div>
+    <div class="vol">
+      <button id="voldown" aria-label="Volume down">−</button>
+      <span>Volume <b id="vol">-</b></span>
+      <button id="volup" aria-label="Volume up">+</button>
+    </div>
+  </section>
+
+  <div class="foot" id="foot">&nbsp;</div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const hist = [];
+const N = 240;                        /* 60 s at 4 updates per second */
+const show = db => db < -99 ? '--' : db.toFixed(0);
+const frac = db => Math.max(0, Math.min(1, (db + 80) / 80));
+let removedAvg = null;                /* averaged over moments the AI hears no voice */
+
+function draw() {
+  const c = $('chart'), r = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight, pad = 8;
+  const yOf = db => pad + (1 - frac(db)) * (h - 2 * pad);
+  if (c.width !== w * r) { c.width = w * r; c.height = h * r; }
+  const g = c.getContext('2d');
+  g.setTransform(r, 0, 0, r, 0, 0);
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = '#262c36'; g.lineWidth = 1; g.fillStyle = '#8a94a3'; g.font = '11px system-ui';
+  for (const db of [0, -20, -40, -60, -80]) {
+    const y = yOf(db);
+    g.beginPath(); g.moveTo(28, y); g.lineTo(w, y); g.stroke();
+    g.fillText(db, 0, y + 4);
+  }
+  for (const [key, color] of [['in', '#9aa4b2'], ['out', '#37d399']]) {
+    g.strokeStyle = color; g.lineWidth = 2; g.beginPath();
+    hist.forEach((p, i) => {
+      const x = 28 + (w - 28) * (i + N - hist.length) / (N - 1);
+      const y = yOf(p[key]);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+  }
+}
+
+/* Project targets (the problem statement): SNR > 15 dB, STOI > 0.85, PESQ > 2.5,
+   at low delay. It gives no number for the delay; 150 ms one way is the
+   telephone guideline (ITU-T G.114). */
+const DELAY_LIMIT_MS = 150;
+let bench = null, benchSnr = '5', liveDelay = null;
+
+function renderTargets() {
+  if (!bench) return;
+  const row = bench.by_input_snr[benchSnr], t = bench.targets;
+  $('chips').innerHTML = Object.keys(bench.by_input_snr).sort((a, b) => a - b).map(k =>
+    `<button data-b="${k}" class="${k === benchSnr ? 'on' : ''}">${k} dB</button>`).join('');
+  document.querySelectorAll('#chips button').forEach(b => b.onclick = () => { benchSnr = b.dataset.b; renderTargets(); });
+  const goal = (name, hint, val, text, ok, yes = 'target met', no = 'target not met') =>
+    `<div class="goal ${ok ? 'ok' : 'miss'}"><div><div class="name">${name}</div><div class="hint">${hint}</div></div>` +
+    `<div><div class="val">${text}</div><div class="badge">${ok ? '✓ ' + yes : '✗ ' + no}</div></div></div>`;
+  let html =
+    goal('SNR', `target > ${t.snr_db} dB`, row.snr_db, row.snr_db.toFixed(1) + ' dB', row.snr_db > t.snr_db) +
+    goal('STOI', `target > ${t.stoi} · noisy input ${row.stoi_in.toFixed(2)}`, row.stoi, row.stoi.toFixed(2), row.stoi > t.stoi) +
+    goal('PESQ', `target > ${t.pesq} · noisy input ${row.pesq_in.toFixed(2)}`, row.pesq, row.pesq.toFixed(2), row.pesq > t.pesq);
+  if (liveDelay !== null) {
+    html += goal('Delay (live)', `mic to speaker · guideline ≤ ${DELAY_LIMIT_MS} ms`, liveDelay,
+                 Math.round(liveDelay) + ' ms', liveDelay <= DELAY_LIMIT_MS, 'within guideline', 'over guideline');
+  }
+  $('goals').innerHTML = html;
+  $('targets').hidden = false;
+}
+
+async function loadBench() {
+  try { bench = await (await fetch('/bench', {cache: 'no-store'})).json(); renderTargets(); }
+  catch (e) { setTimeout(loadBench, 3000); }
+}
+
+function render(d) {
+  if (liveDelay !== d.delay_ms) { liveDelay = d.delay_ms; renderTargets(); }
+  /* While someone talks the voice dominates both levels and little is
+     removed; what a listener notices is the noise between words. */
+  if (d.ai && d.gain <= 0.35 && d.in > -99) {
+    const r = Math.max(0, d.in - d.out);
+    removedAvg = removedAvg === null ? r : 0.8 * removedAvg + 0.2 * r;
+  }
+  $('removed').textContent = removedAvg === null ? '--' : removedAvg.toFixed(0);
+  $('in').textContent = show(d.in) + ' dB';
+  $('out').textContent = show(d.out) + ' dB';
+  $('inbar').style.width = frac(d.in) * 100 + '%';
+  $('outbar').style.width = frac(d.out) * 100 + '%';
+  const st = $('state');
+  if (d.in < -99 && d.uptime_s > 2) {
+    /* Exact zeros from the mics: no power or a loose wire, not quiet. */
+    st.textContent = 'Mics silent: check mic wires (GPIO 4, 5, 6, 3V3, GND)'; st.style.color = 'var(--bad)';
+  }
+  else if (!d.ai) { st.textContent = 'AI off (no model loaded)'; st.style.color = 'var(--bad)'; }
+  else if (d.late_recent) { st.textContent = 'AI running late'; st.style.color = 'var(--bad)'; }
+  else if (d.gain > 0.35) { st.textContent = 'Voice passing through'; st.style.color = 'var(--out)'; }
+  else { st.textContent = 'Cutting noise'; st.style.color = 'var(--warn)'; }
+  document.querySelectorAll('button[data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === d.mode));
+  $('vol').textContent = `${d.vol} / ${d.vol_max}`;
+  $('foot').textContent = `firmware ${d.fw} · delay ${Math.round(d.delay_ms)} ms · ` +
+                          `${d.late} dropped blocks · ${d.spk_gaps} speaker gaps · ` +
+                          `${d.mic_lost} mic gaps` + (d.rec ? ' · recording' : '');
+  hist.push({in: d.in, out: d.out});
+  if (hist.length > N) hist.shift();
+  draw();
+}
+
+async function tick() {
+  try {
+    const r = await fetch('/data', {cache: 'no-store'});
+    render(await r.json());
+    $('link').textContent = 'live'; $('link').className = 'pill live';
+  } catch (e) {
+    $('link').textContent = 'disconnected'; $('link').className = 'pill';
+  }
+  setTimeout(tick, 250);
+}
+
+document.querySelectorAll('button[data-m]').forEach(b => b.onclick = () => fetch('/mode?m=' + b.dataset.m));
+$('volup').onclick = () => fetch('/vol?d=1');
+$('voldown').onclick = () => fetch('/vol?d=-1');
+window.addEventListener('resize', draw);
+tick();
+loadBench();
+</script>
+</body>
+</html>
