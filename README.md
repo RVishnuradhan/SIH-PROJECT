@@ -167,6 +167,35 @@ The limit: mic 2 must hear the voice clearly less than mic 1 (in a helmet,
 boom mic at the mouth and mic 2 on the shell). With the voice about equally
 loud at both, any two-mic method turns some of it down.
 
+### Project targets: SNR, STOI, PESQ and delay
+
+Targets: output **SNR > 15 dB**, **STOI > 0.85**, **PESQ > 2.5**, at low delay
+for real-time communication. STOI and PESQ compare the output with the original
+clean voice, so they can only be measured on mixtures where that voice is known
+(`tools/benchmark_targets.py`); the device cannot compute them live. The test
+runs the firmware's own processing (int8 weights, two mics, level rule) on 40
+scenes per noise level built from speakers and noises the network never saw:
+DNS noise, synthetic engines, wind and gunfire-like impulses, and the team's
+recorded engine noise. Voice at the mouth mic is -45 to -20 dBFS, as measured on
+the board.
+
+| Input SNR | Output SNR | STOI (in -> out) | PESQ (in -> out) | Scenes meeting SNR / STOI / PESQ |
+|---|---|---|---|---|
+| -5 dB | 11.6 dB | 0.67 -> 0.73 | 1.14 -> 1.29 | 28% / 22% / 2% |
+| 0 dB | 13.6 dB | 0.74 -> 0.80 | 1.10 -> 1.37 | 50% / 28% / 0% |
+| **5 dB** | **18.3 dB** | **0.84 -> 0.87** | 1.16 -> 1.69 | 78% / 72% / 8% |
+| **10 dB** | **23.7 dB** | **0.92 -> 0.94** | 1.68 -> 2.33 | 95% / 92% / 22% |
+| **15 dB** | **24.7 dB** | **0.93 -> 0.95** | 1.69 -> 2.46 | 100% / 98% / 40% |
+
+- **SNR > 15 dB and STOI > 0.85 are met on average from an input SNR of 5 dB
+  up.** In harder noise (0 dB and below) they are not.
+- **PESQ > 2.5 is not met** at any noise level (best 2.46 at 15 dB input).
+  PESQ is harsh on impulsive noise and on any change to the voice. It is
+  limited by the network, not by the settings: raising the smallest gain from
+  -30 dB to -10 dB only moved it from 2.27 to 2.21-2.38. A bigger network or
+  more training is needed.
+- Delay from mic to output: **35 ms**, measured on the board.
+
 ### Why the classifier is not in the audio path
 
 The canceller runs on every sample. The classifier looks at 265 ms of audio and

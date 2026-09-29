@@ -6,3 +6,5 @@ scikit-learn>=1.4
 matplotlib>=3.8
 pyserial>=3.5
 pytest>=8
+pystoi>=0.4
+pesq>=0.0.4

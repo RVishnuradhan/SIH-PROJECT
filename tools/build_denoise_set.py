@@ -140,8 +140,10 @@ def _two_mic_noise(rng):
     return n1, n2
 
 
-def make_example2(seed: int):
-    """Two-mic example: features of both mics, target gains for the mouth mic."""
+def make_scene2(seed: int, snr_db: float | None = None):
+    """Two-mic scene waveforms (clean voice at the mouth mic, mouth mic, outward
+    mic). `snr_db` fixes the input SNR at the mouth mic; the random stream is
+    the same either way, so make_example2 does not change."""
     rng = np.random.default_rng(seed)
     clean = _G["clean"]
     s = np.zeros(N)
@@ -167,7 +169,8 @@ def make_example2(seed: int):
 
     s, s2, n1, n2 = (sosfilt(HPF, v) for v in (s, s2, n1, n2))
     if _rms(s) > 1e-6 and _rms(n1) > 1e-6:
-        k = _rms(s) / _rms(n1) / 10 ** (rng.uniform(-5, 20) / 20)
+        snr = rng.uniform(-5, 20)
+        k = _rms(s) / _rms(n1) / 10 ** ((snr if snr_db is None else snr_db) / 20)
         n1, n2 = n1 * k, n2 * k
     x1, x2 = s + n1, (s2 + n2) * 10 ** (rng.uniform(-2, 2) / 20)   # mic gain mismatch
     g = 10 ** (rng.uniform(-60, -10) / 20) / _rms(x1)
@@ -176,6 +179,12 @@ def make_example2(seed: int):
     hiss = 10 ** (rng.uniform(-85, -70) / 20)                      # mic self-noise
     x1 = x1 + hiss * rng.standard_normal(N)
     x2 = x2 + hiss * rng.standard_normal(N)
+    return s, x1, x2
+
+
+def make_example2(seed: int):
+    """Two-mic example: features of both mics, target gains for the mouth mic."""
+    s, x1, x2 = make_scene2(seed)
     X1, S = stft(x1), stft(s)
     return features2(X1, stft(x2)).astype(np.float16), ideal_gains(S, X1).astype(np.float16)
 
