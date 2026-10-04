@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dynamic Personal Profile</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="logo" id="logoName">My Profile</span>
+    <nav>
+      <a href="#about">About</a>
+      <a href="#skills">Skills</a>
+      <a href="#projects">Projects</a>
+      <a href="#contact">Contact</a>
+    </nav>
+    <div class="tools">
+      <span id="clock" aria-label="Current time"></span>
+      <button id="themeToggle" aria-label="Toggle dark mode">🌙</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="avatar" id="avatar">A</div>
+    <p id="greeting" class="greeting"></p>
+    <h1 id="displayName">Your Name</h1>
+    <p class="typing">I am a <span id="typed"></span><span class="cursor">|</span></p>
+    <p id="displayBio" class="bio">Write something about yourself here.</p>
+    <button id="editToggle" class="btn">✏️ Edit Profile</button>
+
+    <form id="editForm" class="card hidden">
+      <label>Name <input id="inName" type="text" maxlength="40"></label>
+      <label>Bio <textarea id="inBio" rows="3" maxlength="200"></textarea></label>
+      <div class="row">
+        <button type="submit" class="btn">Save</button>
+        <button type="button" id="resetProfile" class="btn ghost">Reset</button>
+      </div>
+    </form>
+  </section>
+
+  <main>
+    <section id="about">
+      <h2>About Me</h2>
+      <div class="card info">
+        <p><strong>Education:</strong> B.E. / B.Tech Student</p>
+        <p><strong>Interests:</strong> Web development, problem solving, open source</p>
+        <p><strong>Goal:</strong> Build useful software that people enjoy using.</p>
+        <p><strong>Profile views on this browser:</strong> <span id="visits">1</span></p>
+      </div>
+    </section>
+
+    <section id="skills">
+      <h2>Skills</h2>
+      <div class="card" id="skillList"></div>
+    </section>
+
+    <section id="projects">
+      <h2>Projects</h2>
+      <div class="filters" id="filters"></div>
+      <div class="grid" id="projectGrid"></div>
+    </section>
+
+    <section id="contact">
+      <h2>Contact Me</h2>
+      <form id="contactForm" class="card" novalidate>
+        <label>Name <input id="cName" type="text"><small class="err"></small></label>
+        <label>Email <input id="cEmail" type="email"><small class="err"></small></label>
+        <label>Message <textarea id="cMsg" rows="4"></textarea><small class="err"></small></label>
+        <button type="submit" class="btn">Send Message</button>
+        <p id="formStatus" role="status"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer>&copy; <span id="year"></span> Dynamic Profile · Built with HTML, CSS &amp; JavaScript</footer>
+  <button id="toTop" class="hidden" aria-label="Back to top">↑</button>
+  <script src="script.js"></script>
+</body>
+</html>
